@@ -66,6 +66,9 @@
 
 ## 更多资源
 
+🌐 **内容导航站** - 在线浏览所有资源：
+👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
+
 📦 **数字产品商店** - 更多创作工具模板和学习资源：
 👉 [https://afdian.com/a/felix007](https://afdian.com/a/felix007)
 
