@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI视频创作入门：从Seedance到成片全流程</title>
+    <meta name="description" content="AI视频创作完整流程：ComfyUI+Ideogram 4.0生成参考图、Seedance 2.0图生视频、ffmpeg合成、TTS配音，新手常见问题解答。">
+    <meta name="keywords" content="AI视频,Seedance,ComfyUI,图生视频,视频创作,ffmpeg,短剧">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/ai-video-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI视频创作入门：从Seedance到成片全流程</h1>
+<blockquote>
+<p>不用学PR，不用买昂贵的设备，一个人用AI就能做出专业级短视频。本文手把手教你完整流程。</p>
+</blockquote>
+<hr />
+<h2>AI视频创作，到底能不能用？</h2>
+<p>先说结论：<strong>能，而且效果越来越好。</strong></p>
+<p>2026年的AI视频生成已经过了「实验阶段」，Seedance 2.0、Wan 2.1等模型生成的视频质量，在很多场景下已经可以商用。</p>
+<h2>完整工作流</h2>
+<pre><code>写提示词 → AI生成参考图 → 图生视频 → 视频合成 → 配音 → 导出
+</code></pre>
+<h3>第一步：生成参考图（ComfyUI + Ideogram 4.0）</h3>
+<p>用结构化的JSON提示词生成高质量底图：</p>
+<pre><code class="language-json">{
+  &quot;high_level_description&quot;: &quot;赛博朋克城市夜景，霓虹灯，雨夜街道&quot;,
+  &quot;style_description&quot;: &quot;电影级光影，4K，超写实&quot;,
+  &quot;compositional_deconstruction&quot;: {
+    &quot;elements&quot;: [
+      {&quot;name&quot;: &quot;背景城市&quot;, &quot;position&quot;: &quot;远景&quot;, &quot;bbox&quot;: [0, 0, 1, 0.7]},
+      {&quot;name&quot;: &quot;霓虹招牌&quot;, &quot;position&quot;: &quot;中景&quot;, &quot;bbox&quot;: [0.3, 0.2, 0.5, 0.4]}
+    ]
+  }
+}
+</code></pre>
+<blockquote>
+<p>💡 完整出图工作流 + 提示词模板: <a href="https://afdian.com/item/29c5daa6754011f184ee5254001e7c00">ComfyUI出图全流程教程</a></p>
+</blockquote>
+<h3>第二步：图生视频（Seedance 2.0）</h3>
+<p>把参考图输入Seedance 2.0，加动态描述词：</p>
+<pre><code>行人走动，霓虹灯闪烁，车流缓慢移动，雨滴下落，整体氛围宁静
+</code></pre>
+<p>关键参数：<br />
+- duration: 11秒（最佳质量）<br />
+- ratio: 9:16（竖屏短视频）<br />
+- 参考图: data URI格式</p>
+<h3>第三步：视频合成与处理</h3>
+<p>用ffmpeg做后期处理：</p>
+<pre><code class="language-bash"># 慢放 + Ken Burns效果
+ffmpeg -i input.mp4 -filter_complex &quot;setpts=1.5*PTS,zoompan=z=1.01:...&quot;
+# 多段合成+crossfade
+ffmpeg -i clip1.mp4 -i clip2.mp4 -filter_complex &quot;xfade=transition=fade:duration=1&quot;
+</code></pre>
+<h3>第四步：TTS配音叠</h3>
+<p>Edge TTS中文女声：</p>
+<pre><code class="language-bash">edge-tts --voice zh-CN-XiaoxiaoNeural --text &quot;你的旁白文案&quot; --write-media output.mp3
+</code></pre>
+<h2>新手常见问题</h2>
+<p><strong>Q: 电脑配置要求高吗？</strong><br />
+A: ComfyUI推荐12GB以上显存，RTX 3060(12GB)就可以跑</p>
+<p><strong>Q: 视频最长能做多久？</strong><br />
+A: Seedance单段15秒，多段合成可以做任意长度</p>
+<p><strong>Q: 中文文字显示有问题？</strong><br />
+A: 底图不要带文字，用PIL后叠加系统字体</p>
+<hr />
+<p>📦 <strong>完整视频创作教程含脚本和提示词库</strong>:<br />
+👉 <a href="https://afdian.com/item/270b25be754011f18a705254001e7c00">AI视频创作从入门到实战</a> — ¥14.99</p>
+<p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
