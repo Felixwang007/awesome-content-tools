@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>n8n自动化工作流实战指南：AI Agent + 可视化编排，从零搭建你的自动化流水线</title>
+    <meta name="description" content="n8n自动化工作流实战指南：什么是n8n、核心概念速览（节点/触发器/凭据/表达式）、AI Agent三种集成玩法（AI Agent节点/LLM工具/MCP服务器）、3个即抄即用的工作流模板（RSS→AI摘要→推送、Webhook→AI分类、定时→AI分析报告）、部署运维与10个真实踩坑（Docker/Windows本地安装、错误处理、幂等、凭据管理）。2026年用n8n搭AI自动化必读。">
+    <meta name="keywords" content="n8n,自动化工作流,AI Agent,工作流编排,可视化自动化,n8n教程,RSS自动化,AI摘要,Webhook,n8n部署,MCP,LLM集成,定时任务,无代码自动化,自托管">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/n8n-automation-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>n8n自动化工作流实战指南：AI Agent + 可视化编排，从零搭建你的自动化流水线</h1>
+<blockquote>
+<p>如果你每天还在「手动复制粘贴」——把新闻从A站搬到笔记里、把表格数据拿去问AI、把AI的答案再贴到别处——那你正在被重复劳动消耗。n8n是2026年最值得学的开源自动化工具：可视化拖拽、400+现成节点、原生支持AI Agent和MCP服务器，个人免费自托管。本文从核心概念到3个即抄即用的工作流模板，再到真实踩坑清单，一次讲透。</p>
+</blockquote>
+<hr />
+<h2>一、n8n 是什么？为什么 2026 年它成了自动化首选</h2>
+<p>n8n 是一个<strong>开源的可视化工作流自动化平台</strong>（GitHub 10万+星标，fair-code 许可证）。你可以把不同系统用「节点」连接成一条流水线：数据进来 → 加工 → 调用AI → 输出到目标系统，全程不需要写胶水代码，也完全可控。</p>
+<p>它和 Zapier / Make 这类 SaaS 自动化工具的核心区别：</p>
+<table>
+<thead>
+<tr><th>对比项</th><th>n8n（自托管）</th><th>Zapier / Make</th></tr>
+</thead>
+<tbody>
+<tr><td>费用</td><td>个人自托管免费（Docker 一行命令）</td><td>按任务数订阅，免费额度少</td></tr>
+<tr><td>数据隐私</td><td>数据留在你自己的服务器</td><td>数据经过第三方平台</td></tr>
+<tr><td>AI 能力</td><td>原生 AI Agent 节点 + MCP 支持</td><td>AI 功能逐步补齐但封闭</td></tr>
+<tr><td>扩展性</td><td>400+ 内置节点 + 社区节点 + 自己写节点</td><td>依赖官方应用列表</td></tr>
+<tr><td>复杂度</td><td>学习曲线略陡，但上限极高</td><td>简单，但复杂逻辑受限</td></tr>
+</tbody>
+</table>
+<p>一句话：<strong>想要「零月费 + 数据可控 + AI 深度集成」的自动化，n8n 自托管是当前最优解。</strong></p>
+<h2>二、核心概念速览（10分钟入门）</h2>
+<ul>
+<li><strong>Workflow（工作流）</strong>：一条完整的自动化流水线，由节点串联而成。</li>
+<li><strong>Trigger（触发器）</strong>：流水线的起点。常用四种——<code>Schedule</code>（定时，类cron）、<code>Webhook</code>（被外部调用触发）、<code>RSS Feed</code>（监控源更新）、<code>Manual</code>（手动/测试触发）。</li>
+<li><strong>Node（节点）</strong>：一个具体动作，如 HTTP Request、Gmail、Notion、OpenAI、Telegram、数据库等。</li>
+<li><strong>Credentials（凭据）</strong>：各服务的 API Key 集中管理，加密存储，工作流里引用不暴露明文。</li>
+<li><strong>Expression（表达式）</strong>：用 <code>{{ }}</code> 引用上一个节点的数据，例如 <code>{{ $json.title }}</code>、<code>{{ $('HTTP Request').item.json.content }}</code>。这是 n8n 最核心的语法。</li>
+<li><strong>Executions（执行记录）</strong>：每次运行的输入输出都留痕，排错全靠它。</li>
+</ul>
+<h2>三、AI Agent 三种集成玩法</h2>
+<h3>玩法1：AI Agent 节点（最省事）</h3>
+<p>n8n 有现成的 <code>AI Agent</code> 节点：选择模型提供商（OpenAI / Anthropic / DeepSeek / 本地 Ollama 等都支持）、写 system prompt、给 Agent 挂上工具（工具就是其他节点），它就能自主决定调用哪个工具完成任务。适合「自然语言驱动」的自动化。</p>
+<h3>玩法2：LLM 节点（最可控）</h3>
+<p>在流水线中间插一个 <code>LLM</code> 节点，把上一步的数据丢给大模型做<strong>单次处理</strong>：摘要、分类、提取结构化字段、翻译。输出 JSON 结构后直接接数据库或表格节点。适合「确定性管道 + AI 加工」的组合，出错容易定位。</p>
+<h3>玩法3：MCP 服务器（2026 新趋势）</h3>
+<p>n8n 已支持作为 MCP Server 对外提供工作流能力（实例级 MCP 端点），也可以在工作流里调用外部 MCP 工具。这意味着：<strong>你搭好的 n8n 工作流，可以被 Claude Code、Cursor 等 Agent 直接当工具调用</strong>——自动化资产从此复用到任何 Agent 场景。</p>
+<blockquote>
+<p>选型建议：流程固定、要稳定 → 用 LLM 节点做单点加工；流程灵活、要自主 → 用 AI Agent 节点；要跨系统复用能力 → 走 MCP。</p>
+</blockquote>
+<h2>四、3 个即抄即用的工作流模板</h2>
+<h3>模板1：每日资讯简报（RSS → AI 摘要 → 推送飞书/微信/邮件）</h3>
+<pre><code>Schedule Trigger（每天 08:00）
+    → RSS Feed Read（订阅 3-5 个源，取最近 24h 条目）
+    → LLM 节点（提示词：按主题聚类，每条 50 字以内中文摘要）
+    → Markdown 组装（把摘要拼成一条消息）
+    → 飞书消息 / Telegram / 邮件 任一节点推送
+</code></pre>
+<p>做完这一条，你就再也不用早上刷一堆源了——每天自动收到一份精炼简报。</p>
+<h3>模板2：网页/表单 Webhook → AI 分类 → 自动归档</h3>
+<pre><code>Webhook Trigger（接收 POST JSON）
+    → LLM 节点（提示词：把文本分类为 求助/咨询/投诉/其他，并提取 姓名+联系方式+关键词）
+    → Switch 节点（按分类分流）
+    → 写入 Notion/Excel/数据库 + 按分类发不同通知
+</code></pre>
+<p>适合客服工单、投稿收集、问卷回收等场景，秒级响应，省掉人工登记。</p>
+<h3>模板3：定时数据采集 → AI 分析 → 生成日报/周报</h3>
+<pre><code>Schedule Trigger（每天 17:30）
+    → HTTP Request（抓取行情/榜单/监控指标 API）
+    → LLM 节点（提示词：输出涨跌归因 + 明日关注点，JSON 格式）
+    → 生成 Markdown 日报
+    → 写入文档库 + 推送给自己
+</code></pre>
+<p>日报/周报、竞品监控、价格跟踪都能用这个骨架改。</p>
+<h2>五、部署与运维</h2>
+<h3>Docker 自托管（推荐，一条命令）</h3>
+<pre><code>docker run -d --name n8n \
+  -p 5678:5678 \
+  -v n8n_data:/home/node/.n8n \
+  -e N8N_SECURE_COOKIE=false \
+  docker.n8n.io/n8nio/n8n
+# 浏览器打开 http://localhost:5678 开始搭建
+</code></pre>
+<h3>Windows 本地（npm）</h3>
+<pre><code>npm install n8n -g
+n8n start        # 默认 5678 端口，数据目录 ~/.n8n
+</code></pre>
+<h3>云版</h3>
+<p>不想折腾服务器就用 n8n Cloud 免费层（有限执行次数），或国内云服务器上 Docker 部署（2核2G 起步即可跑个人流程）。</p>
+<h2>六、真实踩坑与最佳实践（10条）</h2>
+<ol>
+<li><strong>npm 安装起不来先查 sqlite3</strong>：新版 npm 默认阻止 postinstall 脚本，会导致 sqlite3 原生模块没编译成功、n8n 启动即崩。解决：手动安装预编译 <code>node_sqlite3.node</code>，或改用 Docker 部署绕开。</li>
+<li><strong>凭据永远走 Credentials 管理</strong>：不要在工作流里硬编码 API Key，换环境时你会感谢自己。</li>
+<li><strong>先手动触发 + Mock 数据测试</strong>：每条工作流上线前，用 Manual Trigger + 样例 JSON 跑通，再开定时。</li>
+<li><strong>错误处理要显式配置</strong>：在节点「错误处理」里设置失败分支（重试 N 次 / 发告警），别让失败静默。</li>
+<li><strong>幂等设计</strong>：定时任务可能重复触发，写入端要按「唯一键」去重（比如按条目 URL 判断是否已入库）。</li>
+<li><strong>定时器用 UTC 换算好时区</strong>：n8n 的 Schedule 默认 UTC，国内早上 8 点要设 <code>0 0 * * *</code> 的 0 点（即 00:00 UTC = 08:00 北京时间）。</li>
+<li><strong>大数据量分批处理</strong>：一次处理几百条时用「Split In Batches」节点，避免超时和限流。</li>
+<li><strong>LLM 输出要 JSON Schema 约束</strong>：在 LLM 节点里要求「只输出合法 JSON」，后面接 JSON 解析节点，别让模型自由发挥。</li>
+<li><strong>监控执行记录</strong>：定期看一眼 Executions 页面的失败率曲线——自动化最怕「悄悄不干活」。</li>
+<li><strong>版本管理</strong>：n8n 支持把工作流导出为 JSON 文件，放进 Git 仓库，改坏了随时回滚。</li>
+</ol>
+<hr />
+<p>n8n 的价值不在「工具本身」，而在<strong>把重复劳动变成一次性的搭建成本</strong>。先挑一个你每天最烦的重复任务，用上面三个模板之一搭起来，跑一周，你会回来感谢自己。</p>
+<p>如果你在做 AI 内容创作、Agent 自动化或数字产品变现，欢迎关注本站的持续更新，也欢迎在<a href="https://afdian.com/a/felix007">爱发电商店</a>获取更多实战模板与教程。</p>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 爱发电数字产品商店 · 持续更新</p>
+</div>
+</div>
+</body>
+</html>
