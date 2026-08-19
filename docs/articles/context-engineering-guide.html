@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent上下文工程实战指南：2026年范式转变，让大模型真正听懂你</title>
+    <meta name="description" content="AI Agent上下文工程实战指南：为什么同样的模型别人用得溜你用得差？2026年上下文工程六大范式转变（规则→判断力、举例→接口设计、全量前置→渐进披露、重复→简洁工具描述、固定记忆→自动记忆、简单规范→丰富引用），5个可立即上手的上下文设计技巧（系统提示词瘦身、记忆分层、工具schema优化、技能按需加载、外部验证闭环），附自查清单与真实案例。Claude 5时代每个AI使用者与开发者必读。">
+    <meta name="keywords" content="上下文工程,context engineering,AI Agent,提示词工程,prompt engineering,系统提示词,system prompt,Claude 5,渐进披露,progressive disclosure,工具设计,MCP,技能按需加载,Agent记忆,上下文窗口,AI自动化,大模型应用">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/context-engineering-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent上下文工程实战指南：2026年范式转变，让大模型真正听懂你</h1>
+<blockquote>
+<p>你有没有遇到过这种情况：同一个大模型，别人用它写出了惊艳的 Agent 应用，你用它却只会得到「正确的废话」？问题往往不在模型，而在<strong>上下文（Context）</strong>——你塞给模型的那一坨信息怎么组织、按什么顺序、保留什么、砍掉什么。2026年，Anthropic 用 Claude 5 掀起了上下文工程的新范式：规则让位给判断力，例子让位给接口设计，全量塞入让位给渐进披露。这篇文章把这套新范式翻译成能直接上手的方法。</p>
+</blockquote>
+<hr />
+<h2>一、先搞懂：上下文工程 ≠ 提示词工程</h2>
+<p>提示词工程（Prompt Engineering）关心的是「怎么跟模型说一句话」，上下文工程（Context Engineering）关心的是<strong>「模型在决策那一刻，手里握着哪些信息、以什么形态呈现」</strong>。后者是前者的超集：</p>
+<table>
+<thead>
+<tr><th>维度</th><th>提示词工程</th><th>上下文工程</th></tr>
+</thead>
+<tbody>
+<tr><td>关注单元</td><td>单次对话 / 单条指令</td><td>整个 Agent 的生命周期信息流</td></tr>
+<tr><td>核心问题</td><td>怎么说模型才听话</td><td>什么信息该给、什么不该给、何时给</td></tr>
+<tr><td>手段</td><td>措辞、格式、少样本示例</td><td>系统提示词、记忆、工具 schema、技能按需加载、外部验证</td></tr>
+<tr><td>失败代价</td><td>答非所问</td><td>Agent 静默跑偏，看起来成功实则零产出</td></tr>
+</tbody>
+</table>
+<p>一句话：<strong>提示词工程是让模型「说对」，上下文工程是让 Agent「做对」。</strong> 2026年的主流共识是——Agent 能力的上限由上下文设计决定，而不是由模型参数决定。</p>
+<h2>二、2026年上下文工程六大范式转变（Claude 5 新规则）</h2>
+<p>Anthropic 在 Claude 5 一代做了个标志性动作：<strong>砍掉了 Claude Code 约80%的系统提示词</strong>。这不是偷懒，而是把过去几年积累的上下文工程经验总结成了六条新规则。理解这六条，你就掌握了 2026 年的上下文设计哲学。</p>
+<h3>转变1：规则 → 判断力</h3>
+<p>旧做法：在系统提示词里写满「你必须…」「禁止…」「如果…那么…」的硬约束，指望用规则穷举所有情况。</p>
+<p>新做法：<strong>只给原则，不给细则。</strong> 让模型用自己的判断力处理具体情境。规则写得越细，模型越容易在规则没覆盖的边界上犯蠢；而原则性的引导（比如「优先保证数据准确，拿不准就明说」）能让模型在未知场景下做出合理决策。</p>
+<p>实战含义：检查你的系统提示词，如果超过一半是「禁止」和「必须」，说明你在用规则对抗不确定性——该换成判断力了。</p>
+<h3>转变2：举例 → 接口设计</h3>
+<p>旧做法：给模型大量输入输出示例（few-shot），指望它模仿。</p>
+<p>新做法：<strong>把工具（函数）的参数结构设计好，比给一万个例子都管用。</strong> 当模型面对一个参数命名清晰、类型明确、描述简洁的工具接口时，它自然知道怎么调用。示例是「教它猜」，接口是「让它查」。</p>
+<p>实战含义：花时间打磨工具 schema 的 description 字段——每个参数写清楚「是什么、什么时候用、格式要求」，比在提示词里塞 20 条示例的效果更好。</p>
+<h3>转变3：全量前置 → 渐进披露（Progressive Disclosure）</h3>
+<p>旧做法：把所有知识、技能、规范一次性塞进系统提示词，模型一睁眼就要消化整个知识库。</p>
+<p>新做法：<strong>先给目录，按需展开。</strong> 系统提示词里只放「索引」——告诉模型有哪些技能可用、什么时候该加载哪个；真正的内容放在独立的技能文件里，模型需要时才读取。这就是 2026 年「Skills 机制」大行其道的根本原因：上下文窗口再大也是稀缺资源，没必要让模型为用不到的知识买单。</p>
+<p>实战含义：把你的提示词拆成「常驻核心（几百字）+ 按需加载的技能库（每个几百字）」，而不是一份动辄上万字的巨型提示词。</p>
+<h3>转变4：重复 → 简洁工具描述</h3>
+<p>旧做法：同样的要求在不同地方反复强调（「记住你是…」「一定要…」），指望重复加深印象。</p>
+<p>新做法：<strong>同一信息只出现一次，放在最该出现的位置。</strong> 重复不仅浪费 token，还会稀释模型对「关键信息」的注意力权重。工具描述要短——一句话说清用途，让模型扫一眼就知道该不该用。</p>
+<p>实战含义：把「每轮都要遵守」的规则合并到一条原则里；工具描述超过 50 字的，先删一半再说。</p>
+<h3>转变5：固定记忆 → 自动记忆</h3>
+<p>旧做法：把用户的偏好、项目背景写死在 CLAUDE.md / AGENTS.md 里，永久加载。</p>
+<p>新做法：<strong>固定文件只放「不会变的事实」（项目结构、技术栈），会变的观察（用户偏好、最近决定）交给自动记忆机制</strong>——模型在对话中自行判断什么值得记、什么该忘。固定记忆的毛病是会过期：三个月前的用户偏好可能已经变了，但文件还写着。</p>
+<p>实战含义：固定上下文文件要精简到「客观事实」；把「用户上个月说喜欢 X」这类动态信息交给记忆系统管理。</p>
+<h3>转变6：简单规范 → 丰富引用</h3>
+<p>旧做法：在提示词里用文字描述期望的代码风格、输出格式。</p>
+<p>新做法：<strong>直接用代码本身、测试套件、HTML 页面当规范。</strong> 与其写「输出符合 Airbnb 风格的 JavaScript」，不如直接引用一份 lint 配置 + 一个示例文件。模型读代码比读规范理解得更准——规范是翻译过的，代码是原汁原味的。</p>
+<p>实战含义：写代码任务时，把仓库里的现有文件路径直接给模型，让它「照着这个风格写」，而不是描述风格。</p>
+<blockquote>
+<p>记住一句话总结：<strong>判断力优于规则，接口优于例子，按需优于全量，简洁优于重复，自动优于固定，代码优于描述。</strong></p>
+</blockquote>
+<h2>三、5个可立即上手的上下文设计技巧</h2>
+<h3>技巧1：给系统提示词「瘦身」</h3>
+<p>一个健康的系统提示词应该满足：</p>
+<ul>
+<li><strong>≤ 500字</strong>（约等于一屏）：超过这个长度，先问自己「这段信息是每次都需要的吗」。</li>
+<li>只包含三件事：你是谁（角色）、你的总目标、你的行为边界（原则级，不是细则级）。</li>
+<li>没有重复：同一原则只出现一次，用最精炼的话。</li>
+</ul>
+<h3>技巧2：记忆分层</h3>
+<p>把 Agent 的信息分成四层，各管各的：</p>
+<table>
+<thead>
+<tr><th>层级</th><th>内容</th><th>更新频率</th></tr>
+</thead>
+<tbody>
+<tr><td>L1 固定上下文</td><td>项目结构、技术栈、不可变事实</td><td>几乎不更新</td></tr>
+<tr><td>L2 技能库</td><td>按需加载的方法论、模板、参考文件</td><td>低频</td></tr>
+<tr><td>L3 会话记忆</td><td>本次任务的中间状态、决策理由</td><td>高频</td></tr>
+<tr><td>L4 长期记忆</td><td>用户偏好、跨会话经验、教训</td><td>中频，需主动写入</td></tr>
+</tbody>
+</table>
+<p>最常见的错误是把 L4 的内容写进 L1（用户偏好写死进固定文件），或者把 L3 当 L4（把一次性的任务进度当成长期经验存下来）。</p>
+<h3>技巧3：工具 schema 是隐藏的提示词</h3>
+<p>模型通过工具定义来理解「我能做什么」。打磨 schema 的三个要点：</p>
+<ul>
+<li><strong>参数名用动词+名词</strong>：<code>send_message</code>、<code>search_articles</code> 比 <code>fn1</code>、<code>param2</code> 好十倍。</li>
+<li><strong>description 写「什么时候用」</strong>：不是「搜索函数」，而是「当用户想查找文章时调用；参数 query 是搜索关键词，支持模糊匹配」。</li>
+<li><strong>能并行的工具描述里标注</strong>：让模型知道哪些调用可以同时发起，减少往返。</li>
+</ul>
+<h3>技巧4：技能按需加载</h3>
+<p>把 Agent 可能用到的方法论拆成独立文件（SKILL.md / 参考文档），系统提示词里只放一行索引：</p>
+<pre><code>可用技能：
+- 写作类：标题公式、去AI味、爆文结构（写作任务时加载）
+- 数据类：A股分析、行情采集（金融任务时加载）
+- 自动化类：n8n工作流、MCP调用（搭建自动化时加载）
+</code></pre>
+<p>模型需要时才读取对应技能全文。这样即使你有 100 个技能，单次任务的上下文开销也只有几百 token。</p>
+<h3>技巧5：外部验证闭环（最重要的一个）</h3>
+<p>上下文工程最容易忽视的一环：<strong>Agent 自报成功 ≠ 真的成功。</strong> 模型对自己的输出有「自信偏差」，它说「任务完成」可能只是它觉得该这么说。正确做法是引入外部可观测的验证信号：</p>
+<ul>
+<li>发布类任务：验证线上页面真的出现新内容（HTTP 200 + 内容指纹）。</li>
+<li>数据类任务：对比输入数据量和输出记录数。</li>
+<li>长期任务：用结果指标（阅读量、转化率）做滞后验证，而不仅是过程状态。</li>
+</ul>
+<p>把验证写进上下文：「完成任务后，调用 check 工具确认结果真实生效，再报告完成。」这一步能把 Agent 的「假成功率」从 30% 降到接近 0。</p>
+<h2>四、真实案例：一次「静默失败」的解剖</h2>
+<p>2026年，很多内容自动化系统遭遇了同一个诡异现象：<strong>cron 定时任务显示「执行成功」，但产出为零。</strong> 系统提示词写得无懈可击、模型没报错、日志全是 green——可发布出去的内容一篇都没有阅读。</p>
+<p>用上下文工程的视角解剖，问题出在三处：</p>
+<ol>
+<li><strong>上下文里塞了太多「写作框架」</strong>：系统提示词 3000 字，全是「三我分析」「荣格原型」等学术框架。模型每次生成都在「套框架」，而不是「写内容」——框架是给分析用的，不是给创作用的。</li>
+<li><strong>技能文件 170KB 全文倾倒</strong>：模型每轮都要消化整个技能库，上下文里 90% 是它根本用不上的内容，关键约束反而被稀释。</li>
+<li><strong>没有外部验证</strong>：任务报告「发布成功」依据的是 API 返回的 200，而不是文章真的出现在首页、真的有人读。状态是模型自己报的，不是系统测的。</li>
+</ol>
+<p>修复方案：系统提示词砍到 300 字只留原则；技能改为按需加载；加一条铁律——「发布后必须抓取线上页面验证内容真实存在，否则视为失败」。修复后产出质量显著回升。这个案例说明：<strong>大多数「AI 不行」的抱怨，实际是上下文设计不行。</strong></p>
+<h2>五、自查清单：给你的 Agent 上下文做个体检</h2>
+<ul>
+<li>☐ 系统提示词 ≤ 500 字，且没有重复内容？</li>
+<li>☐ 「禁止/必须」类硬规则是否换成了原则性引导？</li>
+<li>☐ 每个工具的参数名和描述是否清晰到「不用例子也能用对」？</li>
+<li>☐ 技能和长文档是否按需加载，而不是全量塞入？</li>
+<li>☐ 固定记忆文件里是否混入了会过期的动态信息？</li>
+<li>☐ 任务完成后是否有外部可观测的验证步骤？</li>
+<li>☐ 上下文里最重要的信息是否放在最靠前/最显眼的位置？</li>
+</ul>
+<p>七项全过，你的 Agent 已经超过 80% 的同行了。</p>
+<hr />
+<p>上下文工程不是玄学，它是<strong>「把稀缺的上下文窗口花在刀刃上」的工程学科</strong>。2026年的趋势很明确：模型越来越强，上下文设计越来越成为区分高手和普通用户的分水岭。从今天起，别再往提示词里堆规则了——先砍一半，再按需加载，最后加上外部验证，你会看到立竿见影的变化。</p>
+<p>如果你在做 AI 内容创作、Agent 自动化或数字产品变现，欢迎关注本站的持续更新，也欢迎在<a href="https://afdian.com/a/felix007">爱发电商店</a>获取更多实战模板与教程。</p>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 爱发电数字产品商店 · 持续更新</p>
+</div>
+</div>
+</body>
+</html>
