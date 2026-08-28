@@ -70,6 +70,7 @@
 👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
 
 📖 **精选文章**（SEO内容页）：
+- [AI Agent评测与可观测性实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-evaluation-observability-guide.html) - 假成功陷阱/评测方法/重试策略/上线检查清单
 - [AI Agent自动化实战指南：从踩坑到真正落地](https://felixwang007.github.io/awesome-content-tools/articles/ai-agent-automation-guide.html) - MCP/自动化五步法/真实踩坑记录
 - [头条号标题怎么写才能爆？9大标题公式拆解](https://felixwang007.github.io/awesome-content-tools/articles/headline-formulas.html)
 - [AI视频创作入门：从Seedance到成片全流程](https://felixwang007.github.io/awesome-content-tools/articles/ai-video-guide.html)
