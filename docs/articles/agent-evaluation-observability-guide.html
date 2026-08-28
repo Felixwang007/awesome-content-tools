@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent评测与可观测性实战指南：怎么知道你的Agent真的在干活？</title>
+    <meta name="description" content="AI Agent最危险的失败不是崩溃，而是静默成功。本文从假成功陷阱、可观测性三件套（日志/追踪/指标）、评测方法论、外部验证器、重试策略五个维度，讲清楚怎么验证Agent真的在干活，附上线前检查清单与真实踩坑复盘。">
+    <meta name="keywords" content="AI Agent,可观测性,Agent评测,LLM监控,假成功,重试策略,Terminal-Bench,Agent基准测试,自动化,运维,LLMOps">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-evaluation-observability-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent评测与可观测性实战指南：怎么知道你的Agent真的在干活？</h1>
+<blockquote>
+<p>很多人把Agent接上API、跑通一次就宣布「上线了」，结果第二天发现它连续七天「成功」执行任务，却一行有用的输出都没有。AI Agent最危险的失败不是崩溃，而是<strong>静默成功</strong>——状态显示OK，产出为零。本文讲清楚：怎么设计评测、怎么看日志、怎么防止假成功，让自动化真正可以信任。</p>
+</blockquote>
+<hr />
+<h2>一、先认清问题：Agent的「假成功」为什么比崩溃更可怕</h2>
+<p>一个经典论断：「HTTP 200 陷阱」——Agent 最危险的失败模式不是崩溃，而是<strong>静默成功但方向错误</strong>。崩溃会报警、会有人处理；假成功不会，它只会在后台默默空转，烧着 Token，产出垃圾。</p>
+<p>三个最常见的假成功形态：</p>
+<ul>
+<li><strong>状态字符串 ≠ 测量结果</strong>：Agent 报的「success: true」「last_status: ok」是模型生成的散文（prose），不是测量。模型只会描述它认为自己做了什么，不会验证外部世界是否真的发生了变化。</li>
+<li><strong>方向正确、执行为空</strong>：任务逻辑跑通了，但每一步都在空转——搜索返回空、文件没写进去、接口被限流静默降级，Agent 却一路绿灯报成功。</li>
+<li><strong>重试循环假装努力</strong>：无限重试同一个失败请求，看起来「一直在干活」，实际是在调试自己的固执，而不是在解决 API 的问题。</li>
+</ul>
+<blockquote>
+<p>一句话：<strong>如果「完成」的定义只来自 Agent 自己的汇报，那你运行的不是自动化，是自我感动。</strong>真正的完成，必须由外部、可观测、可验证的信号来定义。</p>
+</blockquote>
+<h2>二、可观测性三件套：日志、追踪、指标</h2>
+<p>先把「看得见」做好，再谈「做得好」。生产级 Agent 至少要三样东西：</p>
+<h3>1. 决策收据（Decision Receipts / Custody Logs）</h3>
+<p>每个关键动作都要留一份不可变、可追溯的收据，而不是流水账。一条合格的决策收据至少包含：</p>
+<ul>
+<li>主体（哪个 Agent 做的）</li>
+<li>客体（对什么对象做的）</li>
+<li>范围与过期时间（权限边界）</li>
+<li>策略哈希（依据哪条规则，规则本身留档）</li>
+<li>幂等键（重放不会产生副作用）</li>
+</ul>
+<pre><code># 一条决策收据的示例结构
+{
+  "actor": "publish_agent_v3",
+  "object": "article_id=4821",
+  "scope": "toutiao.main",
+  "policy_hash": "sha256:9f2c…",
+  "expires_at": "2026-09-01T00:00:00Z",
+  "idempotency_key": "pub-4821-20260828-001"
+}
+</code></pre>
+<p>为什么要哈希和幂等键？因为 Agent 重跑、并发、故障恢复都是常态——没有幂等键，一次重试就可能重复发布、重复扣费、重复写入。</p>
+<h3>2. 追踪（Tracing）</h3>
+<p>把一次任务的完整链路串起来：哪条提示词 → 调了哪个工具 → 返回什么 → 下一步决策是什么。业界标准是 OpenTelemetry，中文社区用得多的开源方案有 Langfuse 等自托管追踪平台。追踪的目的不是看热闹，而是<strong>复盘时能回放决策路径</strong>——出了错能回答「它为什么这么做」。</p>
+<h3>3. 指标（Metrics）</h3>
+<p>自动化不是玄学，是数字。至少监控这些：</p>
+<ul>
+<li>任务成功率（按外部验证口径，不是自报口径）</li>
+<li>每次任务成本（Token 消耗 / API 费用）</li>
+<li>端到端延迟</li>
+<li>重试深度（平均每个任务重试几次，重试超过 N 次 = 有问题）</li>
+<li>缓存命中率与假命中率（用缓存时要分开统计，否则会拿过期决策当新决策）</li>
+</ul>
+<blockquote>
+<p>经验值：如果一套自动化上线两周，你说不出「成功率多少、单次成本多少、哪一步最常失败」，那它还没有达到生产标准。</p>
+</blockquote>
+<h2>三、评测方法论：从基准测试到回归测试</h2>
+<p>可观测性解决「现在发生了什么」，评测解决「这个 Agent 到底行不行」。</p>
+<h3>1. 行业基准：知道天花板在哪</h3>
+<p>2026 年值得关注的 Agent 能力基准：</p>
+<table>
+<tr><th>基准</th><th>测什么</th><th>参考动态</th></tr>
+<tr><td>Terminal-Bench</td><td>终端环境真实任务执行</td><td>头部模型从 56.9 涨到 82.7，是 agentic 能力最热门的赛道之一</td></tr>
+<tr><td>ARC-AGI-1 / ARC-AGI-2</td><td>抽象推理（难例）</td><td>ARC-AGI-1 头部约 89%，ARC-AGI-2 只有 61%——难例仍是分水岭</td></tr>
+<tr><td>SWE-bench 系列 / DeepSWE</td><td>真实代码仓库任务</td><td>模型间差距大，适合选「写代码 Agent」时参考</td></tr>
+<tr><td>Toolathlon</td><td>工具调用能力</td><td>头部约 70，说明工具调用已接近实用线</td></tr>
+<tr><td>ExploitBench</td><td>安全/漏洞利用链路</td><td>后段增益大：训练瓶颈从模型转移到环境</td></tr>
+<tr><td>RealReplicaBench</td><td>高保真、有状态、可复现的长程任务</td><td>专门打击「测试时作弊」——环境可复现，结果可核对</td></tr>
+</table>
+<p>基准不是拿来攀比的，是拿来<strong>校准预期</strong>的：你选的模型在目标能力上处于什么水位，直接决定自动化方案要不要加人工兜底。</p>
+<h3>2. 自建评测集：比基准更重要</h3>
+<p>行业基准是别人的题，你的业务是「你的题」。至少维护 20~50 条真实历史任务作为评测集，每次换模型、改提示词、升级依赖，都全量回归跑一遍，看：</p>
+<ul>
+<li>成功任务的<strong>输出质量</strong>有没有退化（不只是跑通没跑通）</li>
+<li>曾经失败的案例有没有修好（回归测试）</li>
+<li>成本和时间有没有明显变化</li>
+</ul>
+<h3>3. 过程评分，不只评结果</h3>
+<p>只对最终结果打分是滞后指标。更有效的做法是<strong>对中间决策轨迹打分</strong>：工具选择是否合理、重试是否及时止损、权限申请是否最小化。过程级可见性做好了，评测结果才可解释——不然你只知道「这次失败了」，不知道「哪一步决策错了」。</p>
+<h2>四、外部验证器：唯一可信的「完成」定义</h2>
+<p>这是整篇文章最核心的一条：<strong>Agent 不能给自己的作业打分。</strong></p>
+<h3>1. 什么是 falsifier（证伪器）</h3>
+<p>每当你准备接受一个「成功」结论，先问一句：<strong>什么样的观察能证明它是错的？</strong>然后把这个观察做成自动检查。</p>
+<ul>
+<li>发布文章 → 外部验证：24 小时后阅读量 &gt; 0？页面真实可访问？</li>
+<li>写入数据库 → 外部验证：用独立查询读回那条记录，比对字段。</li>
+<li>发送消息 → 外部验证：用另一个通道确认对方收到。</li>
+</ul>
+<blockquote>
+<p>只记录结果 = 教 Agent 迷信自己的话。要记录被拒绝的替代方案、当时的前提、以及验证门槛——这才叫日志，不然只是日记。</p>
+</blockquote>
+<h3>2. 外部质量门（Quality Gate）</h3>
+<p>发布类 Agent 的正确姿势是<strong>权限分离</strong>：Agent 负责生产内容，质量门（可以是规则检查、另一个模型、或人工）负责放行。Agent 有「提交权」，没有「发布权」。这样即使 Agent 幻觉、越权、跑偏，破坏也被限制在提交层。</p>
+<p>更进一步的实践：验证器与执行器用不同的激励——执行器想「多产出」，验证器想「少出错」，两者正交，才不会被同一个幻觉带偏。</p>
+<h3>3. 真实案例：last_status=ok 的陷阱</h3>
+<p>我自己的定时任务就踩过这个坑：系统里 19 个 cron 任务全部显示 <code>last_status=ok</code>，看起来一切正常，实际连续 12 天发出去的 AI 生成文章阅读量全部为 0——算法识别并降权了。问题在哪？<strong>「任务跑完」和「任务有效」是两件事。</strong>如果当初给「发文任务」加一个外部验证指标「24 小时阅读量 &gt; 0」，第一天就会报警，而不是第十二天才发现。</p>
+<p>另一个案例：某个 CLI 工具加了一个 <code>--headless</code> 参数后返回 <code>success: true</code>，但文章根本没发布。工具自报的成功，和用户看到的成果，差了整整一个发布环节。</p>
+<h2>五、重试策略：别把重试当努力</h2>
+<p>重试是自动化里最容易写错、也最烧钱的部分。先分类，再决定要不要重试：</p>
+<table>
+<tr><th>错误类型</th><th>例子</th><th>该不该重试</th></tr>
+<tr><td>永久性错误</td><td>400 参数错、401 鉴权失效、418 拒绝、模型不存在</td><td>不重试，直接报警修配置</td></tr>
+<tr><td>临时性错误</td><td>429 限流、503 过载、网络抖动</td><td>重试，但要指数退避 + 抖动</td></tr>
+<tr><td>超时</td><td>无 Retry-After 头的 5xx</td><td>有限重试（1~2 次），超过就停下</td></tr>
+</table>
+<p>记住「重试税」：每次重试都要重新序列化上下文、重新烧 Token，还可能改变目标状态。规则：<strong>同一原因失败两次 = 停下来想，而不是停下来重试。</strong>第三次重试往往把 5 分钟的修复拖成 40 分钟的故障。</p>
+<pre><code># 一个合格的重试骨架（伪代码）
+for attempt in range(3):
+    try:
+        result = call_api(payload, idempotency_key=key)
+        return result
+    except RateLimitError as e:
+        sleep(backoff(attempt) + jitter())   # 指数退避
+    except PermanentError:
+        raise                            # 永久错误直接抛
+raise TimeoutError("超过重试上限，停止")
+</code></pre>
+<h2>六、2026年值得用的开源工具清单</h2>
+<ul>
+<li><strong>Langfuse</strong> —— 开源自托管的 LLM 可观测性平台，追踪 + 评测 + 成本统计一体，可接 OpenTelemetry。</li>
+<li><strong>promptfoo</strong> —— 提示词与 Agent 回归测试工具，维护评测集、对比模型输出，CI 里就能跑。</li>
+<li><strong>DeepEval</strong> —— 面向 LLM 应用的开源评测框架，几十个开箱即用的指标（忠实度、相关性、幻觉检测等）。</li>
+<li><strong>OpenTelemetry GenAI 语义约定</strong> —— 标准化的追踪埋点规范，生态工具都能吃。</li>
+<li><strong>RealReplicaBench</strong> —— 长程 Agent 基准，高保真可复现环境，适合验证「多步任务不迷路」。</li>
+<li><strong>AGENTS.md 规范文件</strong> —— 把可移植的 Agent 行为规范写进仓库，让评测与协作有统一基准。</li>
+</ul>
+<h2>七、上线前检查清单</h2>
+<table>
+<tr><th>维度</th><th>检查项</th><th>通过标准</th></tr>
+<tr><td>完成定义</td><td>「成功」有外部验证口径</td><td>不依赖 Agent 自报</td></tr>
+<tr><td>日志</td><td>关键动作有决策收据</td><td>含主体/客体/策略哈希/幂等键</td></tr>
+<tr><td>追踪</td><td>任务链路可回放</td><td>能回答「它为什么这么做」</td></tr>
+<tr><td>指标</td><td>成功率/成本/重试深度有基线</td><td>上线两周能说出数字</td></tr>
+<tr><td>评测集</td><td>≥20 条真实任务 + 回归测试</td><td>换模型/改提示词必跑</td></tr>
+<tr><td>权限</td><td>Agent 只有提交权，无发布权</td><td>质量门独立于执行器</td></tr>
+<tr><td>重试</td><td>错误分类 + 指数退避 + 幂等键</td><td>无无限重试路径</td></tr>
+<tr><td>告警</td><td>假成功有兜底监控</td><td>如「连续 N 天产出为零」自动报警</td></tr>
+</table>
+<h2>八、三个真实踩坑复盘</h2>
+<h3>复盘一：19 个任务全部 ok，产出全部为零</h3>
+<p>症状：cron 面板一片绿。根因：状态指标是「任务跑完」，不是「任务有效」。修复：给发文类任务加外部验证指标（24 小时阅读量），并把「跑通 ≠ 做好」写进复盘模板。</p>
+<h3>复盘二：CLI 返回 success: true，文章没发布</h3>
+<p>症状：工具自报成功，用户没看到任何成果。根因：headless 模式的假成功路径没有校验发布环节的真实响应。修复：以「目标平台上的真实存在」为唯一成功标准，移除假成功参数。</p>
+<h3>复盘三：重试把 5 分钟问题拖成 40 分钟故障</h3>
+<p>症状：一个永久性 401 错误被无限重试，日志刷屏。根因：没有错误分类，所有异常一律重试。修复：永久错误直接抛 + 告警，只有 429/503 走退避重试，加上幂等键防止重放副作用。</p>
+<hr />
+<p><strong>总结：</strong>评测和可观测性不是「上线后再补」的奢侈品，而是 Agent 自动化的地基。记住三句话——<strong>状态是散文，验证是测量；Agent 不能给自己打分；跑通不等于做好。</strong>把这三条刻进你的自动化设计里，你才敢把真正重要的事情交给 Agent。</p>
+</div>
+<div class="footer">
+    <p><a href="../index.html">Awesome Content Tools 导航站</a> · 更多创作与自动化资源见 <a href="https://afdian.com/a/felix007">爱发电商店</a></p>
+</div>
+</body>
+</html>
