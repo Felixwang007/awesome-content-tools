@@ -48,6 +48,7 @@
 | 资源 | 说明 |
 |------|------|
 | [AI Agent 智能体开发实战](https://afdian.com/item/97751968754011f1b52052540025c377) | MCP协议/工具链/多Agent协作 |
+| [BulkPublish API 与 MCP](https://github.com/azeemkafridi/bulkpublish-api) | 面向 AI Agent 的社交媒体内容创建、改写、排程、跨平台发布与分析；提供 [MCP 文档](https://app.bulkpublish.com/docs) |
 | [AI 渗透测试工具实战指南](https://afdian.com/item/9a2d9770754011f198bf52540025c377) | 自动化漏洞发现/AI安全工具编排 |
 | [OAuth 2.1 认证系统搭建指南](https://afdian.com/item/9f8dbf92754011f18cae5254001e7c00) | SSO/RBAC/多租户认证架构 |
 | [PDF文档智能处理与LLM集成](https://afdian.com/item/a2d7c7d8754011f1ad3152540025c377) | PDF解析/RAG/批量文档处理流水线 |
