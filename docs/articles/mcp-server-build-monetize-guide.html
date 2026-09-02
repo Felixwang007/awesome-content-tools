@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP服务器开发与上架变现实战指南：从零构建一个能赚钱的AI Agent工具</title>
+    <meta name="description" content="MCP服务器开发与上架变现完整指南：2026年MCP协议已捐给Linux基金会旗下Agentic AI Foundation，月下载量过亿，OpenAI/Google/Anthropic全部原生支持。本文手把手教你用FastMCP从零构建第一个MCP Server（工具/资源/提示词三种能力+完整代码），再把它变成收入：Apify/MCPize/Agensi等六大市场渠道分佣对比（80%收入分成、月付$1.4M给开发者）、自动化天花板上限评估（全API/半API/无API）、真实案例（免费行情数据源+股票分析MCP打包上架）。AI Agent开发者、独立开发者、想靠MCP赚钱的创作者必读。">
+    <meta name="keywords" content="MCP服务器,MCP server开发,MCP变现,MCP教程,FastMCP,Apify,MCPize,Agensi,AI Agent工具,MCP市场,Model Context Protocol,MCP Registry,Skills over MCP,MCP monetization,AI工具开发,独立开发者,API变现,Claude工具,Claude Code MCP">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/mcp-server-build-monetize-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>MCP服务器开发与上架变现实战指南：从零构建一个能赚钱的AI Agent工具</h1>
+<blockquote>
+<p>2026 年，AI Agent 生态里最确定的机会不是再做一个聊天模型，而是做<strong>模型们抢着调用的「工具」</strong>。MCP（Model Context Protocol）已经从一个实验性协议变成事实标准：月下载量超过 1 亿次，OpenAI、Google、Anthropic 的原生客户端全部支持，2026 年协议本身更被捐给了 Linux 基金会旗下的 Agentic AI Foundation。更关键的是，围绕 MCP 已经长出了成熟的付费市场——Apify 每月付给开发者超过 140 万美元，MCPize 提供 80% 的收入分成。本文用一套完整实战：从 FastMCP 写第一个 Server，到把它打包上架赚钱，全程可复制。</p>
+</blockquote>
+<hr />
+<h2>一、为什么 2026 年值得学 MCP 开发</h2>
+<p>先看三组事实，它们决定了这是窗口期而不是红海：</p>
+<ul>
+<li><strong>协议已成标准且中立</strong>：MCP 由 Anthropic 发起，2026 年正式捐给 Linux 基金会旗下的 Agentic AI Foundation，消除了「这是某家公司私有协议」的顾虑。OpenAI 的 Responses API、Google 的 Gemini 生态都原生支持 MCP，意味着你写一个 Server，<strong>所有主流 Agent 客户端都能用</strong>——这是 HTTP 之后的又一次「一次编写、处处运行」。</li>
+<li><strong>能力边界在快速扩展</strong>：2026 年 MCP 路线图包含 MCP Registry（官方服务器注册表）、Triggers（Webhook 式事件推送，服务器可以主动通知客户端）、Streaming（流式响应）、Skills over MCP（技能分发），远程 MCP 已支持 OAuth 2.1。早期入场的人能在 Registry 上线前排到好位置。</li>
+<li><strong>付费市场已经跑通</strong>：开发者不需要自己搭支付和分发，平台把「写工具→收钱」之间的所有脏活都包了（见第三节）。</li>
+</ul>
+<p>如果你还不熟悉 MCP 的架构（Host/Client/Server 三角色、Tools/Resources/Prompts 三原语），建议先读本站的<a href="mcp-protocol-guide.html">《MCP协议完全指南：AI Agent的万能插头》</a>，本文默认你已经知道 MCP 是什么，直接进入「怎么做 + 怎么卖」。</p>
+<h2>二、用 FastMCP 从零构建第一个 Server</h2>
+<p>官方 Python SDK 提供的 <code>FastMCP</code> 是目前上手最快的框架——装饰器声明工具，几十行代码就是一个能用的 Server。下面是一个<strong>A 股行情查询工具</strong>的完整示例（数据源用腾讯免费行情接口 <code>qt.gtimg.cn</code>，无需 API Key，国内直连稳定）：</p>
+<pre><code># 安装：pip install "mcp[cli]" fastmcp
+# 依赖：requests
+from fastmcp import FastMCP
+
+mcp = FastMCP("a-share-quote")
+
+@mcp.tool()
+def get_quote(symbol: str) -> dict:
+    """查询A股实时行情。symbol格式：sh600519（沪市）/sz000858（深市）。
+
+    Args:
+        symbol: 股票代码，带市场前缀，如 sh600519、sz000858
+    """
+    import requests
+    url = f"https://qt.gtimg.cn/q={symbol}"
+    # 腾讯行情接口返回 GBK 编码
+    text = requests.get(url, timeout=10).content.decode("gbk", errors="ignore")
+    parts = text.split("~")
+    if len(parts) &lt; 40:
+        return {"error": "查询失败，请检查代码格式"}
+    return {
+        "名称": parts[1], "现价": parts[3], "昨收": parts[4],
+        "今开": parts[5], "最高": parts[33], "最低": parts[34],
+        "成交量(手)": parts[36], "更新时间": parts[30],
+    }
+
+@mcp.resource("market://hot-list")
+def hot_list() -> str:
+    """当日热门板块摘要（资源类能力，供Agent直接读取）"""
+    return "示例：银行/半导体/新能源 领涨，AI应用 领跌（演示用静态数据）"
+
+if __name__ == "__main__":
+    # 本地调试用 stdio；远程部署用 SSE（transport="sse", host="0.0.0.0", port=8000）
+    mcp.run(transport="stdio")
+</code></pre>
+<p>三个要点：</p>
+<ol>
+<li><strong>工具描述写清楚参数格式</strong>：LLM 是靠函数描述来选工具、填参数的，描述模糊 = Agent 不会用。每个参数都写明格式和示例，这是工具「好不好用」的第一决定因素。</li>
+<li><strong>一个 Server 可以同时暴露三种能力</strong>：<code>@mcp.tool()</code>（让 Agent 执行动作）、<code>@mcp.resource()</code>（让 Agent 读取数据）、<code>@mcp.prompt()</code>（给 Agent 提供提示词模板）。多数人只写 tool，浪费了另外两个。</li>
+<li><strong>先本地跑通再上云</strong>：本地用 <code>transport="stdio"</code>，配到 Claude Code / Cursor / 任何支持 MCP 的客户端里直接调试；要给别人远程调用时再切 <code>transport="sse"</code> 部署到服务器。</li>
+</ol>
+<p>调试命令（本地验证工具能否被正确调用）：</p>
+<pre><code># 方式1：在支持MCP的客户端里添加本地服务器，指向启动命令
+# 例如 Claude Code: claude mcp add a-share -- python server.py
+
+# 方式2：用 mcp 官方调试器
+npx @modelcontextprotocol/inspector python server.py
+</code></pre>
+<p>写完先自己当用户用一遍：让 Agent 连续调用工具、传错参数、查不存在的代码——把错误处理写扎实。工具是给「不可预测的调用方」用的，容错比功能重要。</p>
+<h2>三、把 MCP 变成收入：主流渠道分佣对比</h2>
+<p>这是 2026 年最值得关注的变现结构：<strong>你负责写工具，平台负责托管、计费、支付、税务，收入按比例分成</strong>。六大渠道对比如下：</p>
+<table>
+<thead>
+<tr><th>平台</th><th>形式</th><th>分成比例</th><th>特点</th><th>自动化天花板</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Apify</strong> (apify.com)</td><td>MCP Server / Actor（爬虫+工具）</td><td>80% 归开发者</td><td>月付开发者超 $1.4M，按调用次数收费，流量最大</td><td>高：有完整 CLI（apify push）和 REST API</td></tr>
+<tr><td><strong>MCPize</strong> (mcpize.com)</td><td>MCP 服务器托管市场</td><td>80% 归开发者</td><td>托管+支付+税务全包，专门面向 MCP</td><td>高：有 CLI（npx mcpize deploy）</td></tr>
+<tr><td><strong>Agensi</strong> (agensi.io)</td><td>Agent SKILL.md 技能市场</td><td>70% 归创作者</td><td>SKILL.md 纯文本技能，$3-$59 定价</td><td>中：Creator Dashboard 网页上传为主</td></tr>
+<tr><td><strong>技能类中文市场</strong>（虾评等）</td><td>技能/工具市场</td><td>平台各异</td><td>国内开发者友好，中文文档与结算</td><td>高：有发布 REST API（zip 上传即发布）</td></tr>
+<tr><td><strong>Claw Earn</strong> (aiagentstore.ai)</td><td>链上任务市场</td><td>按任务结算</td><td>USDC 链上支付，任务制（非订阅制）</td><td>中：需钱包与链上交互</td></tr>
+<tr><td><strong>自己部署 + 订阅</strong></td><td>自建 SaaS</td><td>100%（扣除支付通道费）</td><td>收入全拿，但托管/客服/获客全自己扛</td><td>低：无平台流量扶持</td></tr>
+</tbody>
+</table>
+<p>选渠道的铁律：<strong>先查自动化天花板，再投入时间</strong>。如果你的目标是「无人值守收钱」，优先选有 CLI/API 的平台（Apify、MCPize）；只有网页上传的平台，每一次发布和更新都消耗你的手动时间，规模大了就是瓶颈。</p>
+<h2>四、上架前的检查清单（少踩 90% 的坑）</h2>
+<p>基于真实踩坑经历，上架前逐条过一遍：</p>
+<ul>
+<li>☐ <strong>工具真的能跑</strong>：在干净环境（新 venv + 只装依赖）里完整跑一遍，而不是在你装了几十个包的开发环境里跑通就完事。</li>
+<li>☐ <strong>数据源合法性</strong>：优先用免费公开接口（腾讯/新浪行情等），别把你的工具绑在需要付费 Key 的源上——用户不会替你买 Key，你的 Key 泄露 = 欠费风险。</li>
+<li>☐ <strong>无本地路径依赖</strong>：代码里不能有 <code>C:\Users\xxx</code>、<code>/home/xxx</code> 这类绝对路径，平台部署环境和你本机不一样。</li>
+<li>☐ <strong>README 写清楚</strong>：工具是干什么的、每个参数什么格式、返回什么、有没有免费额度——README 就是你的转化页。</li>
+<li>☐ <strong>隐私与合规</strong>：不采集用户输入、不打日志明文、不碰需要授权的数据（比如券商交易接口）。平台审核卡的最多的就是这里。</li>
+<li>☐ <strong>价格策略</strong>：新工具先用低价/免费额度拉量，攒到评价和调用量再提价。市场排序普遍偏向「用过的人多」的工具。</li>
+</ul>
+<h2>五、真实案例复盘：一个股票分析 MCP 的从 0 到 1</h2>
+<p>把上面这套方法串起来走一遍（也是本文作者的实操路径）：</p>
+<ol>
+<li><strong>选一个「Agent 高频需要但自己搞不定」的场景</strong>：LLM 不知道实时行情，但「查股票、看K线、筛选低价股」是高频需求。数据源选定腾讯/新浪免费行情接口（零成本、国内直连、无 Key）。</li>
+<li><strong>用 FastMCP 写 3-4 个工具</strong>：实时行情查询、日K线拉取、全市场低价股筛选（配合板块热度）。工具描述全部中英双语写明参数格式。</li>
+<li><strong>本地接 Claude Code 实测</strong>：让它「帮我查一下贵州茅台今天的行情，再对比五粮液」，观察它是否正确调用、输出是否整齐，反复修描述和返回结构。</li>
+<li><strong>打包部署到 Apify</strong>：按平台规范把 Python 项目打成 Actor（<code>npx apify push</code> 一键推送），在控制台做一次公开前的自测。</li>
+<li><strong>发布到市场</strong>：接受平台条款（一般只需网页点一次），然后设置公开 + 定价 + 分类，之后所有更新都走 CLI，不需要再碰网页。</li>
+</ol>
+<p>过程中的三个教训：</p>
+<ul>
+<li><strong>「缺素材」比「缺功能」更常见</strong>：第一个版本功能很全，但 README 没写清楚，几乎没人用。后来把「一句话说清+一张调用示例图」放最顶部，咨询量明显上升——工具市场的转化靠文档，不靠功能列表。</li>
+<li><strong>别在没 API 的平台上硬耗</strong>：曾经花很多轮找一个纯网页上传平台的变通方案，最后发现平台根本没有发布 API。正确的顺序是：第一轮就确认平台自动化天花板，没有 API 就换下一个，而不是找 5 轮 workaround。</li>
+<li><strong>一个工具可以同时上多个市场</strong>：同一份代码打包成 MCP Server 上 Apify/MCPize、打包成 SKILL.md 上 Agensi，互不冲突，边际成本几乎为零，收入却是多份。渠道分散本身也是风险对冲。</li>
+</ul>
+<h2>六、长期 SEO 与推广：让工具被搜到</h2>
+<p>工具上架只是开始，2026 年做开发者工具，「被搜到」和「好用」同等重要：</p>
+<ul>
+<li>每个平台页面的标题和描述都埋入真实搜索词（如 <code>MCP stock quote server</code>、<code>A股 MCP 服务器</code>），不要只写「一个强大的工具」这种无效文案。</li>
+<li>开源一份同名 GitHub 仓库，README 写清楚架构和用法——很多用户会先搜 GitHub 再决定要不要用付费版。</li>
+<li>在 Dev.to / 掘金 / 知乎写「我是怎么做的」类技术文章，文末挂市场链接。这类文章的长尾 SEO 价值很高，一篇可以持续带来几个月的自然流量。</li>
+<li>所有内容互相链接：文章链到市场页，仓库链到文章，市场页链回 GitHub——形成自己的链接网络，而不是把每个页面做成孤岛。</li>
+</ul>
+<hr />
+<p>MCP 是 2026 年少数「<strong>技术门槛低 + 生态窗口开放 + 付费通道成熟</strong>」三者同时成立的方向：协议层的红利期通常只有 1-2 年，等 Registry 塞满、头部工具定型后再入场，成本和难度都会高一个量级。现在动手：先写一个能解决你自己问题的 Server（哪怕只有 3 个工具），本地跑通后立刻上架一个市场——第一笔收入的意义不是钱，是验证整条「开发→分发→收费」链路真的走得通。</p>
+<p>如果你在做 AI Agent、MCP 工具或数字产品变现，欢迎关注本站持续更新，也欢迎在<a href="https://afdian.com/a/felix007">爱发电商店</a>获取更多实战模板与教程（如《AI Agent 智能体开发实战》《AI 多模型协作与决策框架》）。</p>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 爱发电数字产品商店 · 持续更新</p>
+</div>
+</div>
+</body>
+</html>
