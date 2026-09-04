@@ -70,6 +70,7 @@
 👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
 
 📖 **精选文章**（SEO内容页）：
+- [RAG检索增强生成实战指南](https://felixwang007.github.io/awesome-content-tools/articles/rag-knowledge-base-guide.html) - 文档清洗/切分/Embedding/向量库/混合检索/Agentic RAG/评估调优/踩坑清单/四周路线图
 - [MCP服务器开发与上架变现实战指南](https://felixwang007.github.io/awesome-content-tools/articles/mcp-server-build-monetize-guide.html) - FastMCP从零构建/六大市场渠道分佣对比/上架检查清单/真实案例
 - [AI Agent自动化可靠性实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-reliability-guide.html) - 假成功四形态/外部验证闭环/重试纪律/决策凭证
 - [AI Agent评测与可观测性实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-evaluation-observability-guide.html) - 假成功陷阱/评测方法/重试策略/上线检查清单
