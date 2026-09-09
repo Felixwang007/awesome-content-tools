@@ -63,6 +63,11 @@ META = {
         "description": "2026年RAG落地完整指南：文档清洗/文本切分/Embedding选型/向量数据库对比/混合检索与重排优化/Agentic RAG/评估与调优/真实踩坑清单,附四周起步路线图。",
         "keywords": "RAG,检索增强生成,知识库,向量数据库,Embedding,混合检索,Rerank,Agentic RAG,企业知识库问答,大模型应用",
     },
+    "agent-skills-guide": {
+        "title": "AI Agent技能化实战指南：从一条提示词到一个能卖钱的技能包",
+        "description": "2026年Agent技能(Skill)工程完整指南：SKILL.md结构与渐进披露原理、为什么技能化取代大提示词、四个生产环境踩坑记录、经验转技能五步法、技能市场变现地图(虾评/Agensi/Apify/Capafy)、上架实操要点与自查清单。",
+        "keywords": "AI Agent技能,SKILL.md,Agent Skills,技能市场,提示词工程,Claude Skills,技能变现,渐进披露,Agent工程,技能化",
+    },
     "ai-agent-automation-guide": {
         "title": "AI Agent自动化实战指南：从踩坑到真正落地",
         "description": "2026年AI Agent自动化落地指南：MCP协议详解、自动化五步法、真实踩坑记录（HTTP 200陷阱/状态漂移/批量垃圾）、免费工具清单与实战案例。",
