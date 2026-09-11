@@ -70,6 +70,7 @@
 👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
 
 📖 **精选文章**（SEO内容页）：
+- [AI Agent成本优化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-cost-optimization-guide.html) - Token成本结构拆解/三类最贵浪费(静默成功·同因重试·常驻上下文臃肿)/六个降本手法(模型分层路由·提示词缓存·上下文压缩·本地模型·max_tokens·状态指纹缓存)/流水线四道门控/单位产出成本五指标/七天成本审计清单
 - [AI Agent技能化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-skills-guide.html) - SKILL.md结构/渐进披露/技能化取代大提示词/四个踩坑记录/经验转技能五步法/技能市场变现地图/上架要点
 - [AI Agent定时任务实战指南](https://felixwang007.github.io/awesome-content-tools/articles/cron-agent-automation-guide.html) - 定时Agent九条铁律/可验证产物/假成功识别/外部时钟防静默失踪/重试纪律/上线检查清单
 - [RAG检索增强生成实战指南](https://felixwang007.github.io/awesome-content-tools/articles/rag-knowledge-base-guide.html) - 文档清洗/切分/Embedding/向量库/混合检索/Agentic RAG/评估调优/踩坑清单/四周路线图
