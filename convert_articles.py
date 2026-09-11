@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-cost-optimization-guide": {
+        "title": "AI Agent成本优化实战指南：把Token花在能验证的产出上",
+        "description": "2026年AI Agent成本工程实战：Token成本结构拆解、三类最贵浪费（静默成功/同因重试/常驻上下文臃肿）、六个降本手法（模型分层路由/提示词缓存/上下文压缩/本地模型/max_tokens设置/状态指纹缓存）、流水线四道门控、单位产出成本度量五指标、七天成本审计清单。",
+        "keywords": "AI Agent成本,Token优化,大模型成本控制,提示词缓存,模型路由,本地模型,Agent自动化,成本工程,API费用优化,LLM成本",
+    },
     "rag-knowledge-base-guide": {
         "title": "RAG检索增强生成实战指南：从零搭建企业知识库问答系统",
         "description": "2026年RAG落地完整指南：文档清洗/文本切分/Embedding选型/向量数据库对比/混合检索与重排优化/Agentic RAG/评估与调优/真实踩坑清单,附四周起步路线图。",
