@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-browser-automation-guide": {
+        "title": "AI Agent浏览器自动化实战指南：从Playwright MCP到登录态持久化",
+        "description": "2026年AI Agent浏览器自动化落地指南：五种驱动方式选型对比、MCP服务在Windows上的三个部署坑（stdio失效/守护进程被杀/交互提示卡死）、登录态三层降级策略与Chrome v20 Cookie加密的破解路线、SPA页面点击三件套（自定义元素坐标点击/富文本输入/文案选择器）、反检测真实边界（假成功/Cloudflare全站挑战识别）、上线检查清单。",
+        "keywords": "AI Agent浏览器自动化,Playwright MCP,浏览器自动化,browser use,登录态持久化,Cookie导出,反爬,反检测,SPA自动化,Agent工具,网页自动化,CDP",
+    },
     "agent-cost-optimization-guide": {
         "title": "AI Agent成本优化实战指南：把Token花在能验证的产出上",
         "description": "2026年AI Agent成本工程实战：Token成本结构拆解、三类最贵浪费（静默成功/同因重试/常驻上下文臃肿）、六个降本手法（模型分层路由/提示词缓存/上下文压缩/本地模型/max_tokens设置/状态指纹缓存）、流水线四道门控、单位产出成本度量五指标、七天成本审计清单。",
