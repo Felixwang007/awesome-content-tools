@@ -70,6 +70,7 @@
 👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
 
 📖 **精选文章**（SEO内容页）：
+- [AI Agent浏览器自动化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-browser-automation-guide.html) - 五种驱动方式选型/Windows部署三坑(stdio失效·守护进程被杀·交互卡死)/登录态三层降级与Cookie加密破解路线/SPA点击三件套(自定义元素坐标点击·富文本输入·文案选择器)/反检测真实边界(假成功·全站挑战识别)/上线检查清单
 - [AI Agent成本优化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-cost-optimization-guide.html) - Token成本结构拆解/三类最贵浪费(静默成功·同因重试·常驻上下文臃肿)/六个降本手法(模型分层路由·提示词缓存·上下文压缩·本地模型·max_tokens·状态指纹缓存)/流水线四道门控/单位产出成本五指标/七天成本审计清单
 - [AI Agent技能化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-skills-guide.html) - SKILL.md结构/渐进披露/技能化取代大提示词/四个踩坑记录/经验转技能五步法/技能市场变现地图/上架要点
 - [AI Agent定时任务实战指南](https://felixwang007.github.io/awesome-content-tools/articles/cron-agent-automation-guide.html) - 定时Agent九条铁律/可验证产物/假成功识别/外部时钟防静默失踪/重试纪律/上线检查清单
