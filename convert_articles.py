@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-tool-calling-guide": {
+        "title": "AI Agent工具调用实战指南：从工具设计到权限边界",
+        "description": "2026年AI Agent工具调用（Tool Calling）工程实战：按副作用给工具分域（读/算/写/通信）、工具schema与description写法对照表、渐进式工具披露三跳、六类失败分类与重试纪律、写工具幂等键、假成功的三种来源与回读产物修法、权限即注册边界三档模型、大结果指针化、并行与冲突检测、五个可观测指标、14项上线检查清单。",
+        "keywords": "AI Agent工具调用,Tool Calling,Function Calling,工具schema设计,MCP工具,权限边界,幂等,重试策略,假成功,Agent工程,LLM工具,function calling最佳实践",
+    },
     "agent-browser-automation-guide": {
         "title": "AI Agent浏览器自动化实战指南：从Playwright MCP到登录态持久化",
         "description": "2026年AI Agent浏览器自动化落地指南：五种驱动方式选型对比、MCP服务在Windows上的三个部署坑（stdio失效/守护进程被杀/交互提示卡死）、登录态三层降级策略与Chrome v20 Cookie加密的破解路线、SPA页面点击三件套（自定义元素坐标点击/富文本输入/文案选择器）、反检测真实边界（假成功/Cloudflare全站挑战识别）、上线检查清单。",
