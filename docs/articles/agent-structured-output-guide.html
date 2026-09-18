@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent结构化输出实战指南：JSON Schema、约束解码与校验修复</title>
+    <meta name="description" content="2026年AI Agent结构化输出工程实战：四条约束路线对比（提示词/原生json_schema/约束解码/校验层）、schema设计十条规则、七类解析失败对照表（代码块包裹/截断/类型漂移/幻觉枚举/全角标点）、机械修复与校验重试循环代码、错误回注三条纪律、假成功三防护、版本钉扎与字段级不变量回归、宁失败不猜原则、14项上线检查清单。">
+    <meta name="keywords" content="结构化输出,Structured Output,JSON Schema,JSON Mode,约束解码,guided decoding,GBNF grammar,function calling,Agent工程,输出校验,jsonschema,大模型输出解析,提示词工程">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-structured-output-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent结构化输出实战指南：JSON Schema、约束解码与校验修复</h1>
+<p><strong>Agent 的产出要被程序消费，就不能是"一段看起来像 JSON 的文字"。</strong></p>
+<p>2026 年做 Agent 的人都会遇到同一个场景：模型回答得很漂亮，下游程序一 <code>json.loads</code> 直接崩。结构化输出（Structured Output）看着是个小问题，实际上它是 <strong>Agent 从"聊天"变成"干活"的那道门槛</strong>——迈不过去，后面所有自动化都是空中楼阁。</p>
+<p>本文按「谁负责约束 → schema 怎么设计 → 七类失败怎么修 → 校验修复循环 → 假成功 → 版本钉扎」的顺序讲清楚，所有条目都来自真实生产环境的翻车记录。</p>
+<h2>一、先定"谁负责约束"：四条路线，别指望提示词</h2>
+<p>很多人的第一条实现是往提示词里加一句"请只输出 JSON"。这条路线在短输出、简单结构上能用，一旦输出变长、字段变多，<strong>格式崩坏率会肉眼可见地上升</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>路线</th>
+<th>做法</th>
+<th>语法可靠性</th>
+<th>成本</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>提示词约束</td>
+<td>"只输出 JSON，不要解释"</td>
+<td>低（长输出必崩）</td>
+<td>0</td>
+<td>原型验证</td>
+</tr>
+<tr>
+<td>原生结构化输出</td>
+<td><code>response_format: json_schema</code> / structured outputs</td>
+<td>高（模型侧保证）</td>
+<td>API 支持度不一</td>
+<td>云端 API 首选</td>
+</tr>
+<tr>
+<td>约束解码</td>
+<td>llama.cpp GBNF grammar、vLLM guided decoding、Outlines</td>
+<td>高（采样层屏蔽非法 token）</td>
+<td>需要本地推理栈</td>
+<td>本地模型、离线场景</td>
+</tr>
+<tr>
+<td>校验层</td>
+<td>schema validate + 修复重试循环</td>
+<td><strong>唯一能保证语义的</strong></td>
+<td>一点工程成本</td>
+<td>所有场景，必须要有</td>
+</tr>
+</tbody>
+</table>
+<p>两条铁律：</p>
+<ol>
+<li><strong>语法正确 ≠ 语义正确。</strong> JSON Mode / 约束解码只保证"能 parse"，不保证"字段内容对"。它把 <code>{"status":"succes"}</code> 这种拼写错误挡住了，但挡不住 <code>{"status":"ok","items":[]}</code> 这种"格式完美、语义撒谎"。</li>
+<li><strong>校验层不能省。</strong> 无论用哪条路线，程序侧都必须有一个 schema 校验器作为最后一道门。模型会换版本、服务商会换实现、你的提示词会被改——校验器是唯一不随之漂移的东西。</li>
+</ol>
+<h2>二、Schema 设计十条规则</h2>
+<p>Schema 是你和模型之间的接口契约。<strong>设计得好，模型一次就对；设计得差，你会把 30% 的 token 花在重试上。</strong></p>
+<h3>1. 浅优于深：嵌套不超过三层</h3>
+<p>三层以上的嵌套会让字段归属频繁出错。宁可把结构拍平，用列表 + 类型字段表达组合关系：</p>
+<pre><code class="language-json">// 差：深层嵌套，模型经常把 city 挂到 person 下面
+{&quot;order&quot;: {&quot;customer&quot;: {&quot;address&quot;: {&quot;city&quot;: &quot;...&quot;}}}}
+// 好：拍平成列表，每项自带类型
+{&quot;fields&quot;: [{&quot;path&quot;: &quot;customer.city&quot;, &quot;value&quot;: &quot;...&quot;}]}
+</code></pre>
+<h3>2. 枚举替代自由字符串</h3>
+<p><code>status</code> 这种字段用自由字符串，模型一定会给你造出新值。写死枚举，无效值在模型侧就被挡住，省掉一轮重试：</p>
+<pre><code class="language-json">{&quot;status&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;enum&quot;: [&quot;ok&quot;, &quot;partial&quot;, &quot;failed&quot;, &quot;need_input&quot;]}}
+</code></pre>
+<h3>3. 可选字段要么给默认值，要么删掉</h3>
+<p>"可选"在模型眼里等于"看心情"。一个字段如果不是每次都出现，就把它变成枚举里的一个状态，或者给它一个明确的默认值。</p>
+<h3>4. 数字用整数，别用浮点</h3>
+<p>金额用<strong>最小货币单位的整数</strong>（分），比例用<strong>整数百分比</strong>（<code>85</code> 而不是 <code>0.85</code>）。浮点在序列化和跨语言传递里会引入精度噪声，而 Agent 的产出通常要入账或入库。</p>
+<h3>5. 时间统一 ISO 8601 带时区</h3>
+<p><code>2026-09-18T10:30:00+08:00</code>。不要接受"今天""昨天""3天后"这类相对表达——它们只在生成的那一刻成立，落库之后就变成永久错误。</p>
+<h3>6. 每个字段都要有 description</h3>
+<p>JSON Schema 的 <code>description</code> 就是给模型看的接口文档。写清楚单位、格式、边界、以及<strong>"什么时候不该填"</strong>。经验：负例描述比正例描述更省重试。</p>
+<h3>7. 别让模型生成 id、时间戳、哈希</h3>
+<p>模型生成的 ID 必然幻觉，时间戳必然是整个训练分布的均值附近。<strong>这些字段由程序补齐</strong>，schema 里根本不要出现，或者声明为 <code>"const"</code> 由服务端填充。</p>
+<h3>8. 变长列表要给上限，元素结构必须固定</h3>
+<p><code>items</code> 里如果允许任意结构，你会收到混着字符串和对象的数组。规定元素类型、给 <code>maxItems</code>，并让程序侧校验长度。</p>
+<h3>9. 加 schema_version</h3>
+<p>结构化输出是要演化的。加一个 <code>schema_version</code> 常量字段，未来改结构时下游能明确分流，而不是靠猜字段是否存在。</p>
+<h3>10. 别把"自报置信度"当成验收依据</h3>
+<p>让模型返回 <code>confidence: 0.92</code> 看起来很美，但它只是<strong>措辞果断度的副产品</strong>，不是测量。它可以用来做路由（低置信度走人工），<strong>绝不能用来验收</strong>——校准需要外部参照物（重放任务、留出结果、独立验证器），不是模型自己说的话。</p>
+<h2>三、七类常见失败与对应修法</h2>
+<p>把失败分类，是省钱的第一步。<strong>同一种原因失败两次就该停下来想，而不是再重试一次。</strong></p>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>根因</th>
+<th>修法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>输出被 <code>```json</code> 包裹</td>
+<td>提示词没禁 markdown，模型习惯性包装</td>
+<td>明确"不要代码块"，加一层剥壳正则兜底</td>
+</tr>
+<tr>
+<td><code>Unterminated string</code> / 解析到一半断掉</td>
+<td><code>max_tokens</code> 太小，或思维链吃光了预算</td>
+<td>提高 max_tokens；本地推理关掉思考模式（实测思考模式会让 <code>content</code> 直接返回空）</td>
+</tr>
+<tr>
+<td><code>content</code> 为空但 HTTP 200</td>
+<td>思考内容占满了输出预算，或触发了限流提示文本</td>
+<td>检查 <code>finish_reason</code> 和 reasoning 字段，别只看状态码</td>
+</tr>
+<tr>
+<td>类型漂移（<code>"1"</code> vs <code>1</code>、<code>"true"</code> vs <code>true</code>）</td>
+<td>模型对类型的坚持弱于对语义的坚持</td>
+<td>严格模式 + 一层显式类型强制表（写清楚哪些字段允许 coercion）</td>
+</tr>
+<tr>
+<td>枚举出现幻觉值</td>
+<td>模型按语义补了一个"更合理"的值</td>
+<td>schema 枚举 + 服务端白名单校验，落库前直接拒绝</td>
+</tr>
+<tr>
+<td>字段缺失 / 多出陌生字段</td>
+<td>提示词只说了"要有什么"，没说"只能有什么"</td>
+<td><code>additionalProperties: false</code> + <code>required</code> 全列</td>
+</tr>
+<tr>
+<td>中文标点、全角引号导致解析失败</td>
+<td>模型在中文语境下混用全角符号</td>
+<td>parse 前做归一化（全角→半角），再进解析器</td>
+</tr>
+</tbody>
+</table>
+<p>一个反直觉的经验：<strong>限流和额度问题经常伪装成格式问题</strong>。接口在排队时会返回一句自然语言提示（例如"稍后再试"），下游按 JSON 解析就报格式错误——查日志时会一路查错方向。所以任何解析失败，先打印原始响应前 200 字符，确认拿到的是不是模型输出。</p>
+<h2>四、校验修复循环：能修的不问模型</h2>
+<p>正确的处理顺序是<strong>先机械修复，再问模型，最后才判失败</strong>。让模型修一个尾随逗号，是拿最贵的算力干最便宜的活。</p>
+<pre><code class="language-python">import json, re, jsonschema
+
+def normalize(raw: str) -&gt; str:
+    s = raw.strip()
+    s = re.sub(r&quot;^```(?:json)?|```$&quot;, &quot;&quot;, s, flags=re.M).strip()   # 剥代码块
+    s = s.replace(&quot;“&quot;, '&quot;').replace(&quot;”&quot;, '&quot;').replace(&quot;‘&quot;, &quot;'&quot;)     # 全角引号
+    s = re.sub(r&quot;,(\s*[}\]])&quot;, r&quot;\1&quot;, s)                            # 去尾随逗号
+    return s
+
+def parse_and_validate(raw, schema):
+    &quot;&quot;&quot;返回 (data, errors)。同因失败两次即停，由调用方计数。&quot;&quot;&quot;
+    try:
+        data = json.loads(normalize(raw))
+    except json.JSONDecodeError as e:
+        return None, [f&quot;parse_error at line {e.lineno} col {e.colno}: {e.msg}&quot;]
+    # 单值自动包装成列表：模型对&quot;单元素数组&quot;的坚持度很低
+    for k, v in schema.get(&quot;properties&quot;, {}).items():
+        if v.get(&quot;type&quot;) == &quot;array&quot; and not isinstance(data.get(k), list):
+            if data.get(k) is not None:
+                data[k] = [data[k]]
+    errs = [f&quot;{'/'.join(map(str, e.path)) or '&lt;root&gt;'}: {e.message}&quot;
+            for e in jsonschema.Draft202012Validator(schema).iter_errors(data)]
+    return data, errs
+</code></pre>
+<p><strong>错误回注的三条纪律：</strong></p>
+<ol>
+<li><strong>只回注错误路径和期望类型</strong>，不要把整份 schema 再贴一遍。错误信息 <code>items/2/price: expected integer, got string "9.9"</code> 就够了。</li>
+<li><strong>每次重试必须改变输入</strong>。要么附上错误信息，要么降温度。原样重发等于买彩票，而且每一次都是一笔 token 税。</li>
+<li><strong>重试上限 2 次</strong>，之后走降级路径：宽松解析入库并标记待复核，或者直接进人工队列。<strong>明确失败比无限重试便宜得多。</strong></li>
+</ol>
+<h2>五、修复层的边界：宁可失败，不要猜</h2>
+<p>机械修复可以做：</p>
+<ul>
+<li>剥代码块、去尾随逗号、全角转半角、单引号转双引号</li>
+<li>数字字符串转数字、单值包装成单元素数组</li>
+<li>常见同义字段名映射（<code>summary</code> / <code>summary_text</code> / <code>摘要</code> → 统一字段）</li>
+</ul>
+<p><strong>一旦需要"猜语义"就必须停手。</strong> 例如模型返回了 <code>{"total": 120, "items": [...]}</code> 但 items 求和是 118——修复层不该"顺手"把 total 改成 118，那是把数据错误洗成了数据正确。正确做法是把它当作校验失败：要么让模型重算，要么标记为异常。</p>
+<h2>六、假成功：结构化输出最隐蔽的坑</h2>
+<p><strong>HTTP 200 + 合法 JSON + 内容错误</strong>，是生产环境里最贵的失败形态，因为它不会触发任何告警。</p>
+<p>三个防护动作：</p>
+<ol>
+<li><strong>空集合不能表达失败。</strong> <code>items: []</code> 分不清"确实没有"和"没查到"。要求 schema 必须返回 <code>status</code> 和 <code>count</code>，用状态字段表达失败，不要用空数组表达。</li>
+<li><strong>回读产物，不读自述。</strong> 模型说"已保存"不算数，程序去把产物读回来验证一遍。<strong>自述是读路径，产物是写路径；验收只能看写路径。</strong></li>
+<li><strong>三层验证分开做：</strong> 语法（能 parse）→ 结构（过 schema）→ 语义（业务不变量，比如 <code>sum(items) == total</code>、<code>count == len(items)</code>、日期在合理区间）。只做前两层的系统，会在第三层静默出错。</li>
+</ol>
+<p>大结果不要塞回上下文，<strong>指针化</strong>：返回 <code>{"result_id": "..."}</code>，让程序拿着 ID 去取。既省 token，也避免了"模型复述时改写了数据"这一类隐性错误。</p>
+<h2>七、版本钉扎与回归测试</h2>
+<p>结构化输出的行为依赖三件套：<strong>模型版本 + 提示词 + schema</strong>。任何一件动，行为都可能静默变化。</p>
+<ul>
+<li><strong>换基座版本、换服务商，必须重跑回归集。</strong> 固定 20-50 条真实输入 + 期望结构断言，跑一遍只要几分钟，能挡住大多数事故。</li>
+<li><strong>断言要打在字段级不变量上，不能只断言"能解析"。</strong> 最典型的静默失效是：字段还在，语义漂移了——枚举被塞进新值、日期格式从带时区变成裸日期、列表从对象数组变成字符串数组。只做 <code>json.loads</code> 的测试全过，下游却全挂。</li>
+<li><strong>回归样本不能自选。</strong> 从历史真实输入里抽样，别挑表现好的例子——自己挑样本等于把测试集变成表演台。样本要能在事件发生前冻结下来（带可信时间戳），"事后补的样本"没有任何判别力。</li>
+</ul>
+<h2>八、上线检查清单</h2>
+<ul>
+<li>[ ] 已确认 API 是否支持原生结构化输出；不支持则明确用约束解码或强提示词</li>
+<li>[ ] schema 嵌套 ≤ 3 层，列表元素结构固定且有 <code>maxItems</code></li>
+<li>[ ] 所有枚举字段都有白名单，服务端二次校验</li>
+<li>[ ] 金额用整数最小单位，时间为 ISO 8601 带时区</li>
+<li>[ ] id / 时间戳 / 哈希由程序填充，不进 schema</li>
+<li>[ ] 每个字段都有 description，关键字段写了"什么时候不要用"</li>
+<li>[ ] <code>additionalProperties: false</code>，<code>required</code> 完整列出</li>
+<li>[ ] 解析前有归一化层（剥壳、全角、尾随逗号）</li>
+<li>[ ] 校验失败时只回注错误路径，重试 ≤ 2 次且每次改变输入</li>
+<li>[ ] 失败有降级路径（人工队列 / 待复核标记），不会静默吞掉</li>
+<li>[ ] 语义不变量有断言（求和、计数、区间）</li>
+<li>[ ] 验收看写路径产物，不看模型自述</li>
+<li>[ ] 大结果指针化，不塞回上下文</li>
+<li>[ ] 换模型/改 schema 后重跑冻结的回归集，断言打在字段级</li>
+</ul>
+<h2>小结</h2>
+<p>结构化输出不是"让模型输出 JSON"这么一句提示词，而是一条完整链路：</p>
+<p><strong>约束（谁保证语法）→ 契约（schema 设计）→ 修复（机械变换）→ 校验（schema + 不变量）→ 验收（外部产物）→ 回归（版本钉扎）。</strong></p>
+<p>省掉任何一环，模型就会用"格式正确但内容错误"的方式把问题推迟到下游，而下游往往就是你的用户。</p>
+<hr />
+<p>📚 延伸阅读：<a href="agent-tool-calling-guide.html">AI Agent工具调用实战指南</a>、<a href="agent-reliability-guide.html">AI Agent自动化可靠性实战指南</a>、<a href="agent-evaluation-observability-guide.html">AI Agent评测与可观测性实战指南</a></p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
