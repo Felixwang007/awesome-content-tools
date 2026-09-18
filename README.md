@@ -70,6 +70,7 @@
 👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
 
 📖 **精选文章**（SEO内容页）：
+- [AI Agent结构化输出实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-structured-output-guide.html) - 四条约束路线对比(提示词·原生json_schema·约束解码·校验层)/schema设计十条规则/七类解析失败对照表(代码块包裹·截断·类型漂移·幻觉枚举·全角标点)/机械修复与校验重试循环代码/错误回注三纪律/假成功三防护/版本钉扎与字段级不变量回归/14项检查清单
 - [AI Agent工具调用实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-tool-calling-guide.html) - 工具按副作用分域(读/算/写/通信)/工具schema与description写法对照表/渐进式工具披露三跳/六类失败分类与重试纪律(同因失败两次即停)/写工具幂等键/假成功三来源与回读产物修法/权限即注册边界三档/大结果指针化/并行冲突检测/五个可观测指标/14项上线检查清单
 - [AI Agent浏览器自动化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-browser-automation-guide.html) - 五种驱动方式选型/Windows部署三坑(stdio失效·守护进程被杀·交互卡死)/登录态三层降级与Cookie加密破解路线/SPA点击三件套(自定义元素坐标点击·富文本输入·文案选择器)/反检测真实边界(假成功·全站挑战识别)/上线检查清单
 - [AI Agent成本优化实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-cost-optimization-guide.html) - Token成本结构拆解/三类最贵浪费(静默成功·同因重试·常驻上下文臃肿)/六个降本手法(模型分层路由·提示词缓存·上下文压缩·本地模型·max_tokens·状态指纹缓存)/流水线四道门控/单位产出成本五指标/七天成本审计清单
