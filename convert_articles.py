@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-structured-output-guide": {
+        "title": "AI Agent结构化输出实战指南：JSON Schema、约束解码与校验修复",
+        "description": "2026年AI Agent结构化输出工程实战：四条约束路线对比（提示词/原生json_schema/约束解码/校验层）、schema设计十条规则、七类解析失败对照表（代码块包裹/截断/类型漂移/幻觉枚举/全角标点）、机械修复与校验重试循环代码、错误回注三条纪律、假成功三防护、版本钉扎与字段级不变量回归、宁失败不猜原则、14项上线检查清单。",
+        "keywords": "结构化输出,Structured Output,JSON Schema,JSON Mode,约束解码,guided decoding,GBNF grammar,function calling,Agent工程,输出校验,jsonschema,大模型输出解析,提示词工程",
+    },
     "agent-tool-calling-guide": {
         "title": "AI Agent工具调用实战指南：从工具设计到权限边界",
         "description": "2026年AI Agent工具调用（Tool Calling）工程实战：按副作用给工具分域（读/算/写/通信）、工具schema与description写法对照表、渐进式工具披露三跳、六类失败分类与重试纪律、写工具幂等键、假成功的三种来源与回读产物修法、权限即注册边界三档模型、大结果指针化、并行与冲突检测、五个可观测指标、14项上线检查清单。",
