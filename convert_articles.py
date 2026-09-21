@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-long-task-resume-guide": {
+        "title": "AI Agent长任务实战指南：断点续跑、幂等与进度对账",
+        "description": "2026年AI Agent长任务（批量生成/批量爬取/数据集构建/批量转码）工程实战：可恢复执行单元四要素（清单manifest/账本ledger/幂等键/恢复入口）、四档执行粒度选择表、append-only JSONL账本字段设计、幂等三写法（幂等键/读回校验/自然键去重）与tmp+原子改名防呆、配置指纹防陈旧状态、约60行可照抄的ResumableRunner执行器、令牌桶限流与并发隔离熔断、三方对账与缺勤检测、五个真实踩坑对照表、上线前15项检查清单。",
+        "keywords": "AI Agent长任务,断点续跑,checkpoint,幂等,idempotency,进度账本,JSONL,任务恢复,resumable,批量任务,对账,reconciliation,闲时续跑,Agent工程,批处理流水线,状态管理",
+    },
     "agent-structured-output-guide": {
         "title": "AI Agent结构化输出实战指南：JSON Schema、约束解码与校验修复",
         "description": "2026年AI Agent结构化输出工程实战：四条约束路线对比（提示词/原生json_schema/约束解码/校验层）、schema设计十条规则、七类解析失败对照表（代码块包裹/截断/类型漂移/幻觉枚举/全角标点）、机械修复与校验重试循环代码、错误回注三条纪律、假成功三防护、版本钉扎与字段级不变量回归、宁失败不猜原则、14项上线检查清单。",
