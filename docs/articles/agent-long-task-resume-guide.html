@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent长任务实战指南：断点续跑、幂等与进度对账</title>
+    <meta name="description" content="2026年AI Agent长任务（批量生成/批量爬取/数据集构建/批量转码）工程实战：可恢复执行单元四要素（清单manifest/账本ledger/幂等键/恢复入口）、四档执行粒度选择表、append-only JSONL账本字段设计、幂等三写法（幂等键/读回校验/自然键去重）与tmp+原子改名防呆、配置指纹防陈旧状态、约60行可照抄的ResumableRunner执行器、令牌桶限流与并发隔离熔断、三方对账与缺勤检测、五个真实踩坑对照表、上线前15项检查清单。">
+    <meta name="keywords" content="AI Agent长任务,断点续跑,checkpoint,幂等,idempotency,进度账本,JSONL,任务恢复,resumable,批量任务,对账,reconciliation,闲时续跑,Agent工程,批处理流水线,状态管理">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-long-task-resume-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent长任务实战指南：断点续跑、幂等与进度对账</h1>
+<blockquote>
+<p>一个跑 4 小时的批量任务，在第 3 小时因为网络抖动挂掉。这时候真正值钱的问题不是"怎么让它不挂"，而是"<strong>怎么知道它跑到哪了，以及剩下的 1 小时能不能只跑剩下的</strong>"。<br />
+这篇文章讲的是长任务（批量生成、批量爬取、数据集构建、批量转码/上传）的工程化：清单、账本、幂等键、状态指纹、对账。全文是踩坑后总结的，不是教科书。</p>
+</blockquote>
+<hr />
+<h2>一、先说结论：长任务最大的成本不是算力，是"不知道"</h2>
+<p>短任务（&lt;60s）的失败处理方式很简单：<strong>整段重跑</strong>。代价可接受。</p>
+<p>长任务不行。一个 200 项、每项 90 秒的批量任务：</p>
+<ul>
+<li>总时长 5 小时</li>
+<li>第 173 项挂掉，前面 172 项的结果如果只存在内存或只存在"最后一步的汇总文件"里，这 172 项全部作废</li>
+<li>重跑的边际成本 = 172 × 90s ≈ 4.3 小时 + 对应 API/电费成本</li>
+</ul>
+<p>于是长任务失败会发生两件事，而且第二件更贵：</p>
+<ol>
+<li><strong>重跑成本线性叠加</strong>（每挂一次重跑一遍）</li>
+<li><strong>进度信息不可信</strong>——你不知道是"跑完了"还是"看起来跑完了"</li>
+</ol>
+<p>第 2 点是长任务的第一性问题。工程上有一句很实用的话：<strong>没有账本的长任务，失败一次就从零开始；有账本的长任务，失败一次只损失"正在跑的那一项"。</strong></p>
+<h3>长任务和短任务的设计分界线</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>短任务</th>
+<th>长任务</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>恢复策略</td>
+<td>整段重跑</td>
+<td>按项续跑</td>
+</tr>
+<tr>
+<td>状态存放</td>
+<td>内存 / 局部变量</td>
+<td>外部账本（落盘或数据库）</td>
+</tr>
+<tr>
+<td>失败处理</td>
+<td>抛异常 → 退出码</td>
+<td>记失败项 → 继续 → 最后统一重试</td>
+</tr>
+<tr>
+<td>幂等要求</td>
+<td>弱</td>
+<td>强（写操作必须可重复执行）</td>
+</tr>
+<tr>
+<td>可观测性</td>
+<td>结束时打日志</td>
+<td>每一秒都能回答"现在跑到第几项"</td>
+</tr>
+<tr>
+<td>关键指标</td>
+<td>是否成功</td>
+<td>单位时间完成项数 + 失败项占比</td>
+</tr>
+</tbody>
+</table>
+<p><strong>判据</strong>：如果你的任务满足"单项耗时 × 项数 &gt; 10 分钟"，就应该按长任务设计；如果"重跑一次的成本 &gt; 10 分钟"，就必须按长任务设计。没有第三种。</p>
+<hr />
+<h2>二、把长任务定义成「可恢复的执行单元」：四要素</h2>
+<p>不管任务形态是"批量下载 500 个页面"还是"逐场景生成 44 段视频"，能恢复的长任务都要有这四样东西：</p>
+<pre><code>① 清单 manifest     —— 这次要做哪些项（不可变，带版本号）
+② 账本 ledger       —— 每项做到了什么状态（只追加，不改写历史）
+③ 幂等键 idem_key   —— 重复执行同一项时，能识别出&quot;这就是同一件事&quot;
+④ 恢复入口 resume   —— 一个命令：读清单 + 读账本 → 得到待办集合 → 开跑
+</code></pre>
+<p>这四样缺任何一样，"断点续跑"就退化成一个口号。</p>
+<h3>清单必须是不可变的</h3>
+<p>清单变了但账本没变，就会出现"账本说 A 项完成，但新清单里 A 项的定义已经换了"——这是最隐蔽的一类脏数据。</p>
+<p>做法：清单本身带一个内容哈希，写进账本的每一行。</p>
+<pre><code class="language-python">import hashlib, json
+
+def manifest_hash(items: list[dict]) -&gt; str:
+    &quot;&quot;&quot;清单内容哈希：项顺序、内容任一变化都会变&quot;&quot;&quot;
+    blob = json.dumps(items, sort_keys=True, ensure_ascii=False).encode(&quot;utf-8&quot;)
+    return hashlib.sha256(blob).hexdigest()[:12]
+</code></pre>
+<p>跑之前先比一下：账本里记录的 <code>mh</code> 和当前清单的 <code>mh</code> 不一致 → <strong>要么换新账本，要么显式确认复用</strong>。不允许静默复用。</p>
+<hr />
+<h2>三、执行粒度：四档，选错就白干</h2>
+<p>"断点续跑"不是一个粒度，是四个。粒度越细，恢复成本越低，但记账开销越高。</p>
+<table>
+<thead>
+<tr>
+<th>粒度</th>
+<th>恢复成本</th>
+<th>记账开销</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>整任务重跑</td>
+<td>100%</td>
+<td>0</td>
+<td>总时长 &lt; 10 分钟</td>
+</tr>
+<tr>
+<td>分段（每 N 项一个检查点）</td>
+<td>1/N</td>
+<td>极低</td>
+<td>项之间强耦合（有共享上下文）</td>
+</tr>
+<tr>
+<td>逐项（每项一个检查点）</td>
+<td>1 项</td>
+<td>低（每项一行 JSON）</td>
+<td><strong>默认推荐</strong>：项之间独立</td>
+</tr>
+<tr>
+<td>增量（项内可续传）</td>
+<td>&lt; 1 项</td>
+<td>高（要处理部分产物）</td>
+<td>单项耗时很长（&gt;10 分钟，如大文件下载、长视频渲染）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>选择规则</strong>：</p>
+<ol>
+<li>项之间独立 → 逐项。这覆盖 80% 的批量任务。</li>
+<li>项之间需要共享上下文（比如第二项要用第一项的输出做提示词）→ 分段，段大小 = 一次能安全重跑的量。</li>
+<li>单项就要跑十几分钟（视频渲染、模型训练分片）→ 看该工具本身支不支持断点续传。支持就用增量（如 <code>ffmpeg</code> 分段、<code>curl -C -</code>、数据集分片训练）；不支持就承认它是"不可恢复原子项"，靠<strong>缩短单项</strong>来降风险（把 1 个 30 分钟的任务切成 6 个 5 分钟的子任务）。</li>
+</ol>
+<blockquote>
+<p>真实教训：一批 44 段的视频生成任务，如果按"整批提交、等全部完成"来做，任何一段挂掉都要重新排队整批。改成"逐段提交 + 逐段记状态"之后，挂掉的重新提交成本是 4 分钟，不是 3 小时。</p>
+</blockquote>
+<hr />
+<h2>四、账本设计：只追加（append-only），不要改写</h2>
+<p>账本的正确形态是 <strong>JSONL（一行一条 JSON）</strong>，只追加，不修改历史行。</p>
+<pre><code class="language-jsonl">{&quot;ts&quot;:&quot;2026-09-21T09:14:02+08:00&quot;,&quot;mh&quot;:&quot;a3f9c1b2e004&quot;,&quot;item&quot;:&quot;sc_017&quot;,&quot;attempt&quot;:1,&quot;status&quot;:&quot;ok&quot;,&quot;artifact&quot;:&quot;out/sc_017.mp4&quot;,&quot;bytes&quot;:4821093,&quot;cost_usd&quot;:0.031,&quot;dur_s&quot;:87.4}
+{&quot;ts&quot;:&quot;2026-09-21T09:15:31+08:00&quot;,&quot;mh&quot;:&quot;a3f9c1b2e004&quot;,&quot;item&quot;:&quot;sc_018&quot;,&quot;attempt&quot;:1,&quot;status&quot;:&quot;fail&quot;,&quot;err&quot;:&quot;timeout: read 30s&quot;,&quot;dur_s&quot;:30.2}
+{&quot;ts&quot;:&quot;2026-09-21T09:16:44+08:00&quot;,&quot;mh&quot;:&quot;a3f9c1b2e004&quot;,&quot;item&quot;:&quot;sc_018&quot;,&quot;attempt&quot;:2,&quot;status&quot;:&quot;ok&quot;,&quot;artifact&quot;:&quot;out/sc_018.mp4&quot;,&quot;bytes&quot;:5011777,&quot;cost_usd&quot;:0.029,&quot;dur_s&quot;:73.1}
+</code></pre>
+<h3>字段设计（最小可用集）</h3>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>必填</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td>✅</td>
+<td>带时区的 ISO 时间戳。<strong>不带时区的本地时间会在跨天/跨时区复盘时坑死你</strong></td>
+</tr>
+<tr>
+<td><code>mh</code></td>
+<td>✅</td>
+<td>清单哈希，防"清单换了账本没换"</td>
+</tr>
+<tr>
+<td><code>item</code></td>
+<td>✅</td>
+<td>项 ID。稳定、可排序、不含路径分隔符</td>
+</tr>
+<tr>
+<td><code>attempt</code></td>
+<td>✅</td>
+<td>第几次尝试（从 1 开始）。<strong>重试也是历史，不能覆盖</strong></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>✅</td>
+<td><code>ok</code> / <code>fail</code> / <code>skip</code>。只允许这三种，不要发明 <code>partial</code>（见第七节）</td>
+</tr>
+<tr>
+<td><code>artifact</code></td>
+<td>ok 时必填</td>
+<td>产物路径或 URL。<strong>账本里没有 artifact 的 ok 是假成功</strong></td>
+</tr>
+<tr>
+<td><code>err</code></td>
+<td>fail 时必填</td>
+<td>错误摘要（截断到 200 字符）+ 错误类别前缀（<code>timeout:</code> / <code>http403:</code> / <code>oom:</code>）</td>
+</tr>
+<tr>
+<td><code>dur_s</code></td>
+<td>建议</td>
+<td>单项耗时，用来估算剩余时间</td>
+</tr>
+<tr>
+<td><code>cost_usd</code></td>
+<td>建议</td>
+<td>单项成本，用来做预算熔断</td>
+</tr>
+<tr>
+<td><code>bytes</code></td>
+<td>建议</td>
+<td>产物大小，<strong>用来抓"成功但产出为 0 字节"</strong></td>
+</tr>
+</tbody>
+</table>
+<h3>为什么不用「数据库里一行、状态字段 UPDATE」</h3>
+<p>可以，但要注意两点：</p>
+<ol>
+<li><strong>丢掉历史</strong>。<code>status</code> 被反复覆盖后，"这项重试了几次、失败原因是什么"就永久消失了。长任务的失败模式诊断恰恰依赖这些。要么双写事件表，要么直接用 JSONL。</li>
+<li><strong>并发写冲突</strong>。SQLite 在多进程/多线程写的时候容易 <code>database is locked</code>。JSONL 用"一行一次 <code>write()</code> + 文件锁"或"每项一个文件+qps 合并"更省心。</li>
+</ol>
+<p><strong>回放能力</strong>是 JSONL 的隐藏价值：任何时刻可以用几行代码把账本重放成"当前状态视图"，而数据库里你只能看到最终快照。</p>
+<pre><code class="language-python">def current_state(ledger_path: str) -&gt; dict[str, dict]:
+    &quot;&quot;&quot;把 append-only 账本压成当前状态（最后一次 attempt 说了算）&quot;&quot;&quot;
+    state: dict[str, dict] = {}
+    with open(ledger_path, encoding=&quot;utf-8&quot;) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            r = json.loads(line)
+            state[r[&quot;item&quot;]] = r          # 后写的覆盖记录，历史仍在文件里
+    return state
+
+def todo(items: list[dict], state: dict[str, dict], max_attempt: int = 3) -&gt; list[dict]:
+    out = []
+    for it in items:
+        s = state.get(it[&quot;id&quot;])
+        if s is None or (s[&quot;status&quot;] == &quot;fail&quot; and s[&quot;attempt&quot;] &lt; max_attempt):
+            out.append(it)
+    return out
+</code></pre>
+<hr />
+<h2>五、幂等：写操作必须能重复执行</h2>
+<p>断点续跑的前提是"同一项跑两遍，结果一样、副作用只发生一次"。三种写法，按可靠性排序：</p>
+<h3>写法 1：幂等键（推荐）</h3>
+<p>让下游接受一个调用方生成的幂等键，同一个键重复提交只生效一次。</p>
+<pre><code class="language-python">def idem_key(mh: str, item: str) -&gt; str:
+    return hashlib.sha256(f&quot;{mh}:{item}&quot;.encode()).hexdigest()[:32]
+</code></pre>
+<ul>
+<li>提交任务、上传文件、发消息、写数据库，都带上这个键</li>
+<li>服务端不支持幂等键时，自己在本地做一层（键 → 结局 的映射文件）</li>
+</ul>
+<h3>写法 2：先读回，再决定写不写（read-before-write）</h3>
+<pre><code class="language-python">def ensure_artifact(item_id: str) -&gt; str:
+    path = f&quot;out/{item_id}.json&quot;
+    if os.path.exists(path) and os.path.getsize(path) &gt; 0:
+        return path                      # 已存在且非空 → 视为完成，不重复生成
+    data = generate(item_id)
+    tmp = path + &quot;.tmp&quot;
+    with open(tmp, &quot;w&quot;, encoding=&quot;utf-8&quot;) as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)                # 原子替换，防&quot;半截文件被当成完成&quot;
+    return path
+</code></pre>
+<p><strong>注意 <code>os.replace</code> + <code>.tmp</code> 这个组合</strong>：直接写目标文件的话，进程在第 50% 处被杀，会留下一个"存在但残缺"的文件，而"存在"就是幂等判据——于是残缺文件被永久当成成功产物。<strong>先写临时文件、再原子改名</strong>，是长任务里最便宜的防呆。</p>
+<h3>写法 3：自然键去重</h3>
+<p>产物自带唯一标识（URL、内容哈希、文件名含业务键）时用它去重。适合"结果集合"型任务。</p>
+<pre><code class="language-python">seen = {json.loads(l)[&quot;cid&quot;] for l in open(&quot;out/items.jsonl&quot;, encoding=&quot;utf-8&quot;) if l.strip()}
+if cand[&quot;cid&quot;] in seen:
+    continue
+</code></pre>
+<p><strong>别用写法 4："我记得刚才好像做过"</strong>（内存标记 / 只靠日志）。进程一重启就失灵。</p>
+<hr />
+<h2>六、状态指纹：防「陈旧状态」这类最贵的脏数据</h2>
+<p>断点续跑有一个反直觉的风险：<strong>它会把旧版本的产物当成当前版本的产物复用</strong>。</p>
+<p>场景：你改了提示词模板或生成参数，想重跑全部 200 项。但账本说 200 项都是 <code>ok</code>，于是 resume 逻辑把 200 项全部跳过——产物还是旧版本的。</p>
+<p>解法：把"决定产出内容的东西"做成指纹，进账本的每一行。</p>
+<pre><code class="language-python">import hashlib, json, os
+
+def config_fingerprint(config: dict) -&gt; str:
+    &quot;&quot;&quot;影响产出的配置指纹：模型版本、提示词模板哈希、参数、下游 schema 版本&quot;&quot;&quot;
+    keys = [&quot;model&quot;, &quot;prompt_template_hash&quot;, &quot;temperature&quot;, &quot;max_tokens&quot;, &quot;output_schema_ver&quot;]
+    sub = {k: config.get(k) for k in keys}
+    return hashlib.sha256(json.dumps(sub, sort_keys=True).encode()).hexdigest()[:12]
+</code></pre>
+<p>账本行里多两个字段：<code>cf</code>（配置指纹）、<code>v</code>（脚本版本）。resume 的判据从"这项 ok 过"变成：</p>
+<blockquote>
+<p>这项 ok 过 <strong>且</strong> <code>mh</code> 相同 <strong>且</strong> <code>cf</code> 相同 <strong>且</strong> 产物文件存在且非空</p>
+</blockquote>
+<p>任何一条不满足 → 重新执行。指纹变了的项要显式记账为"因指纹变化重跑"，否则复盘时你会很奇怪"为什么这项跑了两次"。</p>
+<p><strong>指纹粒度别做太细</strong>。把 <code>temperature</code> 甚至随机种子都算进去，会导致"每次跑都全量重跑"，续跑能力归零。经验值：指纹只包含<strong>会导致产物语义变化</strong>的东西——模型 ID、提示词模板、关键参数、输出结构版本。纯粹的日志级别、并发数、超时秒数<strong>不进指纹</strong>。</p>
+<hr />
+<h2>七、可复用的断点续跑执行器（约 60 行）</h2>
+<p>把上面所有东西合成一个小执行器。直接照抄可用。</p>
+<pre><code class="language-python">#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+&quot;&quot;&quot;可恢复批量执行器：清单 + 账本 + 幂等 + 对账。&quot;&quot;&quot;
+import hashlib, json, os, time, traceback
+from datetime import datetime, timezone, timedelta
+
+CST = timezone(timedelta(hours=8))
+
+def now() -&gt; str:
+    return datetime.now(CST).isoformat(timespec=&quot;seconds&quot;)
+
+class Ledger:
+    def __init__(self, path: str):
+        self.path = path
+        os.makedirs(os.path.dirname(path) or &quot;.&quot;, exist_ok=True)
+
+    def append(self, rec: dict) -&gt; None:
+        line = json.dumps(rec, ensure_ascii=False) + &quot;\n&quot;
+        with open(self.path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())          # 崩溃前必须落盘
+
+    def replay(self) -&gt; dict[str, dict]:
+        if not os.path.exists(self.path):
+            return {}
+        state = {}
+        with open(self.path, encoding=&quot;utf-8&quot;) as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    state[r[&quot;item&quot;]] = r
+        return state
+
+def artifact_ok(path: str | None) -&gt; bool:
+    return bool(path) and os.path.exists(path) and os.path.getsize(path) &gt; 0
+
+class ResumableRunner:
+    def __init__(self, name: str, items: list[dict], cfg: dict,
+                 run_one, out_dir: str = &quot;out&quot;, max_attempt: int = 3):
+        self.name, self.items, self.run_one = name, items, run_one
+        self.out_dir, self.max_attempt = out_dir, max_attempt
+        self.mh = hashlib.sha256(
+            json.dumps(items, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+        self.cf = hashlib.sha256(
+            json.dumps(cfg, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:12]
+        self.ledger = Ledger(f&quot;state/{name}.jsonl&quot;)
+
+    def pending(self) -&gt; list[dict]:
+        state, out = self.ledger.replay(), []
+        for it in self.items:
+            r = state.get(str(it[&quot;id&quot;]))
+            fresh = r and r.get(&quot;mh&quot;) == self.mh and r.get(&quot;cf&quot;) == self.cf
+            if fresh and r[&quot;status&quot;] == &quot;ok&quot; and artifact_ok(r.get(&quot;artifact&quot;)):
+                continue                                    # 真完成，跳过
+            if not fresh and r and r[&quot;status&quot;] == &quot;ok&quot;:
+                out.append({**it, &quot;_reason&quot;: &quot;fingerprint_changed&quot;})
+                continue                                    # 陈旧状态，重跑
+            if r and r[&quot;status&quot;] == &quot;fail&quot; and r[&quot;attempt&quot;] &gt;= self.max_attempt:
+                continue                                    # 超次数，交给人工
+            out.append(it)
+        return out
+
+    def run(self, limit: int | None = None) -&gt; dict:
+        todo = self.pending()[:limit] if limit else self.pending()
+        state0 = self.ledger.replay()
+        print(f&quot;[{self.name}] mh={self.mh} cf={self.cf} total={len(self.items)} &quot;
+              f&quot;done={len(self.items) - len(todo)} todo={len(todo)}&quot;)
+        stats = {&quot;ok&quot;: 0, &quot;fail&quot;: 0}
+        for i, it in enumerate(todo, 1):
+            iid = str(it[&quot;id&quot;])
+            attempt = (state0.get(iid, {}).get(&quot;attempt&quot;) or 0) + 1
+            t0 = time.time()
+            try:
+                artifact = self.run_one(it)
+                rec = {&quot;ts&quot;: now(), &quot;mh&quot;: self.mh, &quot;cf&quot;: self.cf, &quot;item&quot;: iid,
+                       &quot;attempt&quot;: attempt, &quot;status&quot;: &quot;ok&quot;, &quot;artifact&quot;: artifact,
+                       &quot;bytes&quot;: os.path.getsize(artifact) if artifact and os.path.exists(artifact) else 0,
+                       &quot;dur_s&quot;: round(time.time() - t0, 1)}
+                stats[&quot;ok&quot;] += 1
+            except Exception as e:
+                rec = {&quot;ts&quot;: now(), &quot;mh&quot;: self.mh, &quot;cf&quot;: self.cf, &quot;item&quot;: iid,
+                       &quot;attempt&quot;: attempt, &quot;status&quot;: &quot;fail&quot;,
+                       &quot;err&quot;: f&quot;{type(e).__name__}: {str(e)[:180]}&quot;,
+                       &quot;trace&quot;: traceback.format_exc()[-400:],
+                       &quot;dur_s&quot;: round(time.time() - t0, 1)}
+                stats[&quot;fail&quot;] += 1
+            self.ledger.append(rec)                          # 无论成败都记账
+            print(f&quot;  [{i}/{len(todo)}] {iid} {rec['status']} ({rec['dur_s']}s)&quot;)
+        return stats
+</code></pre>
+<p><strong>注意 <code>run()</code> 里的两个刻意的设计</strong>：</p>
+<ol>
+<li><strong>无论成功还是失败都写账本</strong>。失败也是信息，且下次 resume 要靠 <code>attempt</code> 计数做熔断。</li>
+<li><strong>异常被吞掉，不向上抛</strong>。长任务里一个坏项不该终止整批——它应该被记账、被跳过、被最后统一处理。整批退出码反映的是"跑没跑完"，不是"有没有失败项"（失败项看账本统计）。</li>
+</ol>
+<p>配合一个 <code>--retry-failed</code> 入口，长任务就具备了完整的自我恢复能力：</p>
+<pre><code class="language-bash">python run_batch.py                 # 首跑，断哪算哪
+python run_batch.py                 # 直接再跑一遍（自动续跑，只补缺口）
+python run_batch.py --retry-failed  # 只重试失败项（读取账本，max_attempt 内）
+python run_batch.py --reconcile     # 只做对账，不执行
+</code></pre>
+<hr />
+<h2>八、并发与限流：让失败是「局部」的</h2>
+<p>逐项执行是串行的，5 小时太长。加并发，但并发会引入三个新问题：</p>
+<h3>1. 限流（rate limit）</h3>
+<p>不要用 <code>time.sleep(1)</code> 这种手写节流。用令牌桶 + per-provider 独立桶：</p>
+<pre><code class="language-python">import threading, time
+
+class TokenBucket:
+    &quot;&quot;&quot;线程安全的令牌桶：capacity 个突发配额，每秒补充 rate 个&quot;&quot;&quot;
+    def __init__(self, rate: float, capacity: int):
+        self.rate, self.cap, self.tokens = rate, capacity, float(capacity)
+        self.lock, self.last = threading.Lock(), time.monotonic()
+
+    def take(self, n: int = 1) -&gt; None:
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                self.tokens = min(self.cap, self.tokens + (now - self.last) * self.rate)
+                self.last = now
+                if self.tokens &gt;= n:
+                    self.tokens -= n
+                    return
+                need = (n - self.tokens) / self.rate
+            time.sleep(min(need, 1.0))
+</code></pre>
+<p>不同供应商（模型 API / 图床 / 视频接口）各一个桶——它们的限额互不相干。</p>
+<h3>2. 并发度不等于线程数</h3>
+<p>对 IO 密集任务，并发度取 <code>限额 / 单项平均耗时</code> 的倒数关系。经验值：</p>
+<ul>
+<li>有明确 QPS 上限的 API：并发 = QPS 上限 × 单次耗时（秒）× 0.7（留 30% 余量）</li>
+<li>无明确上限的本地任务（渲染、CPU 计算）：并发 = CPU 核数 或 GPU 显存能容纳的批数</li>
+<li><strong>不确定就先用 2</strong>。并发从 1 提到 2 的收益最大，2 → 4 收益减半，8 以上经常因为限流反而变慢。</li>
+</ul>
+<h3>3. 一个坏项不许拖死整批</h3>
+<p>三个保护：</p>
+<ul>
+<li><strong>单项超时</strong>：每项都有硬超时（如 <code>timeout=90</code>），超时按 fail 记账，继续下一项</li>
+<li><strong>熔断</strong>：连续 N 项失败（如 8 项）→ 停下，避免"配额用完/密钥失效"这类系统性故障把 500 项全部刷成 fail</li>
+<li><strong>失败隔离</strong>：失败项和第 3 次重试项放到批末尾统一处理，不要在原位反复重试（会把 5 分钟修复拖成 40 分钟故障）</li>
+</ul>
+<pre><code class="language-python">consecutive_fail = 0
+for it in todo:
+    ...
+    consecutive_fail = consecutive_fail + 1 if rec[&quot;status&quot;] == &quot;fail&quot; else 0
+    if consecutive_fail &gt;= 8:
+        print(&quot;连续 8 项失败，疑似系统性故障，停机&quot;)
+        break
+</code></pre>
+<hr />
+<h2>九、对账：长任务的最后一道门</h2>
+<p>跑完不等于跑对。长任务结束（以及每天定时）都要做一次<strong>三方对账</strong>：</p>
+<pre><code>清单（应该有哪些）  vs  账本（记录了哪些）  vs  实际产物（磁盘上真的有哪些）
+</code></pre>
+<p>三方对账要能回答这四个问题：</p>
+<table>
+<thead>
+<tr>
+<th>问题</th>
+<th>判据</th>
+<th>严重性</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>有项漏跑</td>
+<td>清单项在账本里没有任何记录</td>
+<td>🔴 高</td>
+</tr>
+<tr>
+<td>有项假成功</td>
+<td>账本 <code>ok</code> 但产物不存在 / 0 字节</td>
+<td>🔴 高</td>
+</tr>
+<tr>
+<td>有孤儿产物</td>
+<td>磁盘上有产物但账本没记录（手工生成的、或账本写失败）</td>
+<td>🟡 中</td>
+</tr>
+<tr>
+<td>有项反复失败</td>
+<td>同一项 <code>fail</code> 次数 ≥ 3</td>
+<td>🟡 中</td>
+</tr>
+</tbody>
+</table>
+<pre><code class="language-python">def reconcile(items: list[dict], ledger_path: str, out_dir: str) -&gt; dict:
+    state = Ledger(ledger_path).replay()
+    ids = {str(i[&quot;id&quot;]) for i in items}
+    missing  = sorted(i for i in ids if i not in state)
+    fake_ok  = sorted(i for i, r in state.items()
+                     if r[&quot;status&quot;] == &quot;ok&quot; and not artifact_ok(r.get(&quot;artifact&quot;)))
+    stuck    = sorted(i for i, r in state.items()
+                      if r[&quot;status&quot;] == &quot;fail&quot; and r[&quot;attempt&quot;] &gt;= 3)
+    produced = {f.rsplit(&quot;.&quot;, 1)[0] for f in os.listdir(out_dir)} if os.path.isdir(out_dir) else set()
+    orphan   = sorted(produced - ids)
+    return {&quot;missing&quot;: missing, &quot;fake_ok&quot;: fake_ok, &quot;stuck&quot;: stuck, &quot;orphan&quot;: orphan}
+</code></pre>
+<h3>缺勤检测：把"没有产物"变成事件</h3>
+<p>这是对账最有价值的一条延伸，也是定时长任务的关键：</p>
+<blockquote>
+<p><strong>"这次任务没产出"不是一个事件，"在预期时间窗口内该出现的产物不存在"才是一个事件。</strong></p>
+</blockquote>
+<p>做法：给每个长任务声明期望窗口（如"每天 09:00 前必须有当天的账本文件，且 <code>ok</code> 数 ≥ 阈值"），让一个独立的检查器（不是长任务自己）来验：</p>
+<pre><code class="language-python">def absence_check(ledger_path: str, expect_ok: int, window_hours: int = 26) -&gt; str | None:
+    &quot;&quot;&quot;返回 None=正常，否则返回告警文本&quot;&quot;&quot;
+    if not os.path.exists(ledger_path):
+        return f&quot;账本文件不存在：{ledger_path}&quot;
+    rows = [json.loads(l) for l in open(ledger_path, encoding=&quot;utf-8&quot;) if l.strip()]
+    if not rows:
+        return &quot;账本为空&quot;
+    latest = max(r[&quot;ts&quot;] for r in rows)
+    if (datetime.now(CST) - datetime.fromisoformat(latest)).total_seconds() &gt; window_hours * 3600:
+        return f&quot;最近一次记账在 {latest}，已超过 {window_hours}h 无新记录&quot;
+    today_ok = sum(1 for r in rows if r[&quot;ts&quot;][:10] == datetime.now(CST).date().isoformat()
+                   and r[&quot;status&quot;] == &quot;ok&quot;)
+    if today_ok &lt; expect_ok:
+        return f&quot;今日 ok 数 {today_ok} &lt; 期望 {expect_ok}&quot;
+    return None
+</code></pre>
+<p><strong>检查器必须独立于被检查的任务</strong>。让任务自己汇报"我正常"，等于让被告当法官——任务挂掉的时候，恰恰是它没法汇报的时候。</p>
+<hr />
+<h2>十、五个真实踩坑对照表</h2>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>根因</th>
+<th>修法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>重跑后产物翻倍（同样的东西生成两遍）</td>
+<td>幂等判据是"内存里有没有跑过"</td>
+<td>幂等判据改成"产物存在且非空"；写临时文件 + <code>os.replace</code> 原子落盘</td>
+</tr>
+<tr>
+<td>resume 之后产出还是旧版本内容</td>
+<td>账本没有配置指纹，改了提示词/参数后全部被跳过</td>
+<td>账本行加 <code>cf</code>（配置指纹）+ <code>mh</code>（清单哈希），resume 判据包含两者</td>
+</tr>
+<tr>
+<td>账本说 173 项 ok，实际磁盘只有 171 个文件</td>
+<td>先写账本后写产物（顺序反了），中间被杀</td>
+<td>顺序必须是：写产物（原子） → 校验产物 → 才写 <code>ok</code> 行。<strong>账本是产物的从属，不能领先于产物</strong></td>
+</tr>
+<tr>
+<td>3 小时的批量任务，一次挂了以后重跑 3 小时</td>
+<td>逐项状态没落盘，只有最后汇总</td>
+<td>逐项 append + <code>fsync</code>；哪怕每项只记 4 个字段</td>
+</tr>
+<tr>
+<td>定时长任务"看起来每天在跑"，但一周没产出</td>
+<td>只看退出码/<code>last_status=ok</code>，没人验产物</td>
+<td>独立缺勤检测器：窗口内应有的产物不存在即告警；对账三方比对</td>
+</tr>
+</tbody>
+</table>
+<p>另外两个容易忽略的：</p>
+<ul>
+<li><strong>时间戳不带时区</strong>：跨天任务、跨时区复盘时，"昨天的数据"会算错。统一写 <code>+08:00</code> 或 UTC。</li>
+<li><strong>产物 0 字节也算存在</strong>：<code>os.path.exists()</code> 对 0 字节文件返回 True。判据必须带 <code>getsize() &gt; 0</code>（必要时还要带"文件可解析"的校验，比如 JSON 能 <code>load</code>、视频能 <code>ffprobe</code>）。</li>
+</ul>
+<hr />
+<h2>十一、上线前检查清单（照着抄）</h2>
+<p><strong>清单与身份</strong></p>
+<ul>
+<li>[ ] 任务有一份不可变的清单，带内容哈希</li>
+<li>[ ] 清单哈希写进账本每一行，resume 前先比对</li>
+<li>[ ] 项 ID 稳定、可排序、不含路径分隔符</li>
+</ul>
+<p><strong>账本</strong></p>
+<ul>
+<li>[ ] 账本 append-only（JSONL 或事件表），失败也记账</li>
+<li>[ ] 每行写入后 <code>flush</code> + <code>fsync</code>（或等价的持久化保证）</li>
+<li>[ ] 每行带时区时间戳、<code>attempt</code> 计数、<code>status</code> 三态、<code>artifact</code>、错误类别前缀</li>
+<li>[ ] 账本可回放成当前状态视图，且有 <code>--reconcile</code> 只用账本不执行的模式</li>
+</ul>
+<p><strong>幂等</strong></p>
+<ul>
+<li>[ ] 所有写操作有幂等键（调用方生成，跨进程稳定）</li>
+<li>[ ] 产物先写临时文件、再原子改名</li>
+<li>[ ] 幂等判据是"产物存在且非空且可解析"，不是内存标记</li>
+</ul>
+<p><strong>指纹</strong></p>
+<ul>
+<li>[ ] 影响产出语义的配置进指纹（模型/模板/关键参数/输出结构版本）</li>
+<li>[ ] 日志级别、并发数、超时秒数<strong>不进</strong>指纹</li>
+<li>[ ] 指纹变化导致的"重跑"在账本里显式标记原因</li>
+</ul>
+<p><strong>并发与隔离</strong></p>
+<ul>
+<li>[ ] 每项有硬超时</li>
+<li>[ ] 有 per-provider 令牌桶限流，不是全局 <code>sleep</code></li>
+<li>[ ] 连续失败熔断（阈值 5~10 项）</li>
+<li>[ ] 失败项与重试项延后到批末尾统一处理</li>
+</ul>
+<p><strong>对账与缺勤</strong></p>
+<ul>
+<li>[ ] 有独立于任务的缺勤检测器（窗口 + 期望产物）</li>
+<li>[ ] 三方对账：清单 / 账本 / 磁盘产物</li>
+<li>[ ] 告警到达的是"产物缺失"，不是"任务退出码非 0"</li>
+</ul>
+<hr />
+<h2>结语</h2>
+<p>长任务的工程本质是一句话：<strong>把不可恢复的过程，拆成可恢复的项，并为每一项留下可被外部核对的痕迹。</strong></p>
+<p>模型能力决定单项做得好不好；清单、账本、幂等、指纹、对账这五样东西，决定的是"跑到一半崩了以后，你还剩多少"。前者靠换模型提升，后者只能靠设计。</p>
+<p>先把账本写出来，其他都会跟着清晰。</p>
+<hr />
+<p><em>本文是「AI Agent 工程实战」系列之一。相关系列：</em><br />
+- <a href="agent-tool-calling-guide.html">AI Agent工具调用实战指南</a><br />
+- <a href="agent-reliability-guide.html">AI Agent自动化可靠性实战指南</a><br />
+- <a href="cron-agent-automation-guide.html">AI Agent定时任务实战指南</a><br />
+- <a href="agent-cost-optimization-guide.html">AI Agent成本优化实战指南</a></p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
