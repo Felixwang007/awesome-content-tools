@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "video-batch-editing-automation-guide": {
+        "title": "AI视频批量剪辑自动化实战指南：脚本化拼装、字幕烧录与质量门",
+        "description": "2026年视频批量剪辑自动化实战（Windows+ffmpeg 8.1实测）：值不值得自动化的判断表、manifest清单驱动四段流水线、两种合轨路线对比（concat demuxer -c copy vs filter_complex concat，附实测时长）、静图zoompan运镜参数、字幕三大坑（Windows路径冒号被当选项分隔符报错原文/中文字体显式指定/硬字幕vs软字幕）、配音与BGM混音比例、loudnorm响度两遍法（实测-21.58→-16.00）、setpts+atempo时长对齐、六项质量门检查脚本、断点续跑账本、剪映草稿draft_content.json结构路线、十个实测踩坑对照表、15项上线检查清单。",
+        "keywords": "视频批量剪辑,ffmpeg批量处理,自动剪辑,字幕烧录,subtitles滤镜,Windows路径转义,zoompan,Ken Burns,响度标准,loudnorm LUFS,concat拼接,剪映草稿,draft_content.json,短视频自动化,图文成片,口播视频,pix_fmt yuv420p,ffprobe质量检查",
+    },
     "agent-long-task-resume-guide": {
         "title": "AI Agent长任务实战指南：断点续跑、幂等与进度对账",
         "description": "2026年AI Agent长任务（批量生成/批量爬取/数据集构建/批量转码）工程实战：可恢复执行单元四要素（清单manifest/账本ledger/幂等键/恢复入口）、四档执行粒度选择表、append-only JSONL账本字段设计、幂等三写法（幂等键/读回校验/自然键去重）与tmp+原子改名防呆、配置指纹防陈旧状态、约60行可照抄的ResumableRunner执行器、令牌桶限流与并发隔离熔断、三方对账与缺勤检测、五个真实踩坑对照表、上线前15项检查清单。",
