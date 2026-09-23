@@ -70,6 +70,7 @@
 👉 [https://felixwang007.github.io/awesome-content-tools/](https://felixwang007.github.io/awesome-content-tools/)
 
 📖 **精选文章**（SEO内容页）：
+- [AI视频批量剪辑自动化实战指南：脚本化拼装、字幕烧录与质量门](https://felixwang007.github.io/awesome-content-tools/articles/video-batch-editing-automation-guide.html) - 值不值得自动化的判断表/manifest清单驱动四段流水线/两种合轨路线对比(concat demuxer -c copy vs filter_complex concat)/zoompan静图运镜参数/字幕三大坑(Windows路径冒号被当选项分隔符·中文字体显式指定·硬字幕vs软字幕)/配音+BGM混音比例/loudnorm响度两遍法(实测-21.58→-16.00)/setpts+atempo时长对齐/六项质量门检查脚本/断点续跑账本/剪映草稿draft_content.json结构/十个实测踩坑对照表/15项检查清单
 - [AI Agent长任务实战指南：断点续跑、幂等与进度对账](https://felixwang007.github.io/awesome-content-tools/articles/agent-long-task-resume-guide.html) - 可恢复执行单元四要素(清单manifest·账本ledger·幂等键·恢复入口)/四档执行粒度选择表(整任务·分段·逐项·增量)/append-only JSONL账本字段设计/幂等三写法(幂等键·读回校验·自然键去重)与tmp+原子改名防呆/配置指纹防陈旧状态/约60行可照抄的ResumableRunner执行器/令牌桶限流·并发隔离·连续失败熔断/三方对账(清单·账本·磁盘产物)与缺勤检测/五个真实踩坑对照表/上线前15项检查清单
 - [AI Agent结构化输出实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-structured-output-guide.html) - 四条约束路线对比(提示词·原生json_schema·约束解码·校验层)/schema设计十条规则/七类解析失败对照表(代码块包裹·截断·类型漂移·幻觉枚举·全角标点)/机械修复与校验重试循环代码/错误回注三纪律/假成功三防护/版本钉扎与字段级不变量回归/14项检查清单
 - [AI Agent工具调用实战指南](https://felixwang007.github.io/awesome-content-tools/articles/agent-tool-calling-guide.html) - 工具按副作用分域(读/算/写/通信)/工具schema与description写法对照表/渐进式工具披露三跳/六类失败分类与重试纪律(同因失败两次即停)/写工具幂等键/假成功三来源与回读产物修法/权限即注册边界三档/大结果指针化/并行冲突检测/五个可观测指标/14项上线检查清单
