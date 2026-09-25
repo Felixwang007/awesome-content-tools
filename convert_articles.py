@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-model-routing-guide": {
+        "title": "AI Agent模型路由实战指南：健康探测、错误分类与降级链",
+        "description": "2026年AI Agent多模型路由实战（全部数据实测）：liveness与readiness双探测设计（端点活着≠能推理）、五类错误分类表附带真实响应体（400 invalid model ID / 403地区限制含routing_funnel归因 / 404模型下线墓碑文案 / 429 / 5xx / 超时）、HTTP 200但content为空的假成功（reasoning_tokens吃光token预算，16→64复现验证）、约150行可跑的route_probe.py降级链脚本与实测trace、先约束后价格再延迟的选路策略、OpenRouter 460个模型真实价格分布（中位$0.42/M、p90 $3.00/M、357倍价差、24个免费、175个≥1M上下文）、粘性路由与提示词缓存税（cached_tokens实测）、按usage.cost记账、七个反模式、12项上线检查清单。",
+        "keywords": "模型路由,Model Routing,多模型降级,fallback chain,健康探测,health check,liveness,readiness,模型下线404,429退避,假成功,reasoning_tokens,finish_reason length,提示词缓存,prompt caching,cached_tokens,OpenRouter,LLM网关,成本记账,Agent工程",
+    },
     "video-batch-editing-automation-guide": {
         "title": "AI视频批量剪辑自动化实战指南：脚本化拼装、字幕烧录与质量门",
         "description": "2026年视频批量剪辑自动化实战（Windows+ffmpeg 8.1实测）：值不值得自动化的判断表、manifest清单驱动四段流水线、两种合轨路线对比（concat demuxer -c copy vs filter_complex concat，附实测时长）、静图zoompan运镜参数、字幕三大坑（Windows路径冒号被当选项分隔符报错原文/中文字体显式指定/硬字幕vs软字幕）、配音与BGM混音比例、loudnorm响度两遍法（实测-21.58→-16.00）、setpts+atempo时长对齐、六项质量门检查脚本、断点续跑账本、剪映草稿draft_content.json结构路线、十个实测踩坑对照表、15项上线检查清单。",
