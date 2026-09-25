@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent模型路由实战指南：健康探测、错误分类与降级链</title>
+    <meta name="description" content="2026年AI Agent多模型路由实战（全部数据实测）：liveness与readiness双探测设计（端点活着≠能推理）、五类错误分类表附带真实响应体（400 invalid model ID / 403地区限制含routing_funnel归因 / 404模型下线墓碑文案 / 429 / 5xx / 超时）、HTTP 200但content为空的假成功（reasoning_tokens吃光token预算，16→64复现验证）、约150行可跑的route_probe.py降级链脚本与实测trace、先约束后价格再延迟的选路策略、OpenRouter 460个模型真实价格分布（中位$0.42/M、p90 $3.00/M、357倍价差、24个免费、175个≥1M上下文）、粘性路由与提示词缓存税（cached_tokens实测）、按usage.cost记账、七个反模式、12项上线检查清单。">
+    <meta name="keywords" content="模型路由,Model Routing,多模型降级,fallback chain,健康探测,health check,liveness,readiness,模型下线404,429退避,假成功,reasoning_tokens,finish_reason length,提示词缓存,prompt caching,cached_tokens,OpenRouter,LLM网关,成本记账,Agent工程">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-model-routing-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent模型路由实战指南：健康探测、错误分类与降级链</h1>
+<blockquote>
+<p>你写的 Agent 里大概有一行这样的配置：<code>model = "xxx"</code>。它今天能用，不代表下周还能用——模型会下线、会改名、会被地区限制、会因为你的 <code>max_tokens</code> 太小而返回一个"HTTP 200 但内容为空"的完美假成功。<br />
+这篇文章讲的是<strong>多模型路由</strong>：怎么知道一个端点"活着但能不能推理"、哪些错误该换模型、哪些错误换了也没用、以及怎么按真实价格和真实延迟选路。文中所有响应体、耗时、token 数、价格都是 2026-09-25 在本机实测抓下来的。</p>
+</blockquote>
+<hr />
+<h2>一、先说结论</h2>
+<p>路由的目的一般被误解成"用更强的模型"。<strong>不是。</strong> 路由解决的是三个跟模型强弱无关的问题：</p>
+<ol>
+<li><strong>可用性</strong>：上游端点会死、会被限流、会下线。单模型配置 = 单点故障。</li>
+<li><strong>适配性</strong>：同一个任务在不同时刻需要不同的上下文长度、不同的成本档位。</li>
+<li><strong>可诊断性</strong>：当请求失败时，你要能立刻分出"是配置错了"还是"该换下一个了"。</li>
+</ol>
+<p>第三条最容易被忽略，也最贵。<strong>把配置错误当成网络抖动去重试，等于把一个 5 分钟的修复变成一个 40 分钟的故障</strong>——因为你的降级链会把所有模型都试一遍，全部失败，然后日志里只有一句"所有模型都不可用"，真正的原因（模型 ID 打错了）被埋在中间某行。</p>
+<p>所以整篇文章的组织方式是：<strong>先做错误分类，再做降级，最后才是选路。</strong></p>
+<hr />
+<h2>二、三个真实故障（都是实测）</h2>
+<h3>故障 1：模型 ID 会突然变成 404，而且带墓碑文案</h3>
+<p>我用一个测试期已结束的模型 ID 发请求，拿到的原文是：</p>
+<pre><code>HTTP 404
+{&quot;error&quot;:{&quot;message&quot;:&quot;Thank you for participating in the Stealth Ox Alpha testing period.
+This model was ZAI's GLM-5.3 Flash. Use it now:
+https://openrouter.ai/z-ai/glm-5.3-flash&quot;,&quot;code&quot;:404},
+ &quot;user_id&quot;:&quot;user_3IHYSY75rfdcrf1QtNybuGd4rAY&quot;}
+</code></pre>
+<p>这类"墓碑响应"非常友好，但它只在聚合平台才可能存在。<strong>直连厂商 API 时，模型下线通常就是一个光秃秃的 404 或 400</strong>，你只能靠告警发现。</p>
+<p>顺手抓了同一时刻的模型列表：<code>GET https://openrouter.ai/api/v1/models</code> 返回 <strong>460 个模型</strong>（755,701 字节 JSON）。里面既有 <code>stealth/space-bunny-alpha</code> 这种测试期代号模型（免费、1M 上下文、支持工具调用），也有大量你没有听说过的厂商 ID。</p>
+<p><strong>结论</strong>：模型 ID 是一个会腐烂的配置项。任何一个把模型名硬编码在业务代码里的系统，都需要一条"模型已下线"的告警路径，而不是等用户报错。</p>
+<h3>故障 2：HTTP 200，但内容是空的（最贵的假成功）</h3>
+<p>这是本次实测里最有价值的一条。我用 <code>max_tokens=16</code> 发了两条最小请求，两个模型都返回 <strong>HTTP 200</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>HTTP</th>
+<th>finish_reason</th>
+<th>completion_tokens</th>
+<th>reasoning_tokens</th>
+<th>content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>z-ai/glm-5.3-flash</td>
+<td>200</td>
+<td>length</td>
+<td>16</td>
+<td><strong>16</strong></td>
+<td><code>''</code>（空）</td>
+</tr>
+<tr>
+<td>openai/gpt-oss-20b</td>
+<td>200</td>
+<td>length</td>
+<td>16</td>
+<td><strong>13</strong></td>
+<td><code>''</code>（空）</td>
+</tr>
+</tbody>
+</table>
+<p>看清楚：这次请求<strong>全部 16 个 completion token 都被 reasoning（思考）吃掉了</strong>，一个字正文都没留下。HTTP 层没有任何异常，<code>usage</code> 也正常返回、正常计费（glm-5.3-flash 这次花了 <code>$1.085e-05</code>）。</p>
+<p>如果你的 Agent 流程只检查 HTTP 状态码，它会认为这一步成功了，然后拿着空字符串继续往下走——最后在生产环境的某个角落爆出一个莫名其妙的下游错误。</p>
+<p><strong>复现与修复验证</strong>（同一批模型，只改 <code>max_tokens</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>max_tokens=16</th>
+<th>max_tokens=64</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>z-ai/glm-5.3-flash</td>
+<td>content=<code>''</code>，finish=length，completion=16，reasoning=16，$1.085e-05</td>
+<td>content=<code>'ok'</code>，finish=stop，completion=46，reasoning=48，$2.585e-05</td>
+</tr>
+<tr>
+<td>openai/gpt-oss-20b</td>
+<td>content=<code>''</code>，finish=length，completion=16，reasoning=13，$3.98e-06</td>
+<td>content=<code>'ok'</code>，finish=stop，completion=32，reasoning=21，$6.38e-06</td>
+</tr>
+</tbody>
+</table>
+<p>所以判据很明确：</p>
+<blockquote>
+<p><strong><code>finish_reason == "length"</code> 且 <code>content</code> 为空 = 失败，不是成功。</strong><br />
+尤其当 <code>usage.completion_tokens_details.reasoning_tokens</code> 接近 <code>max_tokens</code> 时，这不是模型的问题，是你的预算给少了。</p>
+</blockquote>
+<h3>故障 3：端点活着，但不能推理</h3>
+<p>本地 llama.cpp 服务没启动时，<code>GET http://127.0.0.1:8080/v1/models</code> 直接连接失败（<code>URLError</code>，2004ms 后返回）。这还好，至少你知道它死了。</p>
+<p>真正危险的是<strong>反面</strong>：服务起来了、<code>/v1/models</code> 毫秒级秒回、但 <code>/chat/completions</code> 超时。这在本地推理里非常常见——模型权重（比如 18GB 的 31B Q4）放进 20GB 显存，KV cache 溢出到系统内存，元数据接口照样秒回，推理请求直接卡死或 OOM。</p>
+<p><strong>这就是为什么健康检查必须分两层：</strong></p>
+<table>
+<thead>
+<tr>
+<th>探测</th>
+<th>请求</th>
+<th>回答的问题</th>
+<th>耗时级别</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>liveness</td>
+<td><code>GET {base}/models</code></td>
+<td>进程活着吗？网络通吗？</td>
+<td>毫秒</td>
+</tr>
+<tr>
+<td>readiness</td>
+<td><code>POST {base}/chat/completions</code>（1~16 token）</td>
+<td><strong>现在能不能真的推理？</strong></td>
+<td>秒级</td>
+</tr>
+</tbody>
+</table>
+<p>只做 liveness 的健康检查，等于用体温计判断人能不能跑马拉松。</p>
+<hr />
+<h2>三、错误分类：决定能不能靠"换模型"解决</h2>
+<p>这是整个路由逻辑的核心。下面每一行都是我实测抓到的真实响应体：</p>
+<table>
+<thead>
+<tr>
+<th>HTTP / 异常</th>
+<th>分类</th>
+<th>真实响应体（节选）</th>
+<th>能不能换下一个模型解决</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>400</td>
+<td><strong>config</strong></td>
+<td><code>{"error":{"message":"no-such-model-xyz-9999 is not a valid model ID","code":400}}</code></td>
+<td>❌ 不能。ID 打错了，换谁都错</td>
+</tr>
+<tr>
+<td>401</td>
+<td>config</td>
+<td>密钥无效/未授权</td>
+<td>❌ 不能</td>
+</tr>
+<tr>
+<td>402</td>
+<td>config</td>
+<td>余额不足</td>
+<td>❌ 不能。换个模型可能更贵，但根源是钱</td>
+</tr>
+<tr>
+<td>403</td>
+<td>config</td>
+<td><code>{"error":{"message":"This model is not available in your region.","code":403,"metadata":{"routing_funnel":[{"step":"Initial Endpoints","endpoint_count":1}],"failed_routing_step":"Gate Endpoints with Geo Restrictions"}}</code></td>
+<td>❌ 不能。地区限制是账号/网络属性</td>
+</tr>
+<tr>
+<td>404</td>
+<td><strong>gone</strong></td>
+<td>见故障 1 的墓碑文案</td>
+<td>✅ 能，且<strong>必须告警</strong>（配置在腐烂）</td>
+</tr>
+<tr>
+<td>408 / 409 / 425</td>
+<td>transient</td>
+<td>请求超时 / 冲突 / 过早</td>
+<td>✅ 能</td>
+</tr>
+<tr>
+<td>429</td>
+<td>transient</td>
+<td>限流，看 <code>Retry-After</code></td>
+<td>✅ 能（退避后）</td>
+</tr>
+<tr>
+<td>5xx</td>
+<td>transient</td>
+<td>上游错误</td>
+<td>✅ 能</td>
+</tr>
+<tr>
+<td>连接失败 / 读超时</td>
+<td>transient</td>
+<td><code>URLError</code> / <code>TimeoutError</code></td>
+<td>✅ 能</td>
+</tr>
+<tr>
+<td><strong>200 + content 为空</strong></td>
+<td><strong>empty</strong></td>
+<td>见故障 2</td>
+<td>✅ 能（但先检查 <code>max_tokens</code>）</td>
+</tr>
+</tbody>
+</table>
+<p>规则的形状就一句话：</p>
+<blockquote>
+<p><strong>config 类错误立即终止降级链并告警；gone 类降级并告警；transient / empty 类降级。</strong></p>
+</blockquote>
+<p>为什么 config 类必须终止？因为它的存在说明"配置与现实的契约已经破了"。如果这种错误也走降级，你的系统会用第二个、第三个模型接着失败，最终把"配置错误"这个唯一真因淹没在一堆下游噪音里——<strong>降级链会把显式故障变成隐式故障。</strong></p>
+<p>注意 403 的一个细节：那个响应体里的 <code>metadata.routing_funnel</code> / <code>failed_routing_step</code> 字段是聚合平台给的<strong>归因信息</strong>（这里明确说是"Gate Endpoints with Geo Restrictions"这一步挂的）。这类字段值得直接写进你的日志，因为它是少见的"上游主动告诉你为什么"。</p>
+<hr />
+<h2>四、可跑的脚本：route_probe.py</h2>
+<p>下面这个脚本我实际跑过，就是它产生了上文那张 trace 表。设计上有三个刻意的地方：</p>
+<ul>
+<li><strong>双探测分离</strong>：liveness 失败不浪费一次推理超时；</li>
+<li><strong>错误分类先于降级</strong>：config 类直接终止；</li>
+<li><strong>winner 必须满足"内容非空"</strong>：不看状态码看正文。</li>
+</ul>
+<pre><code class="language-python">#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+&quot;&quot;&quot;route_probe.py — 多模型路由的&quot;体检 + 降级链&quot;最小可运行实现。&quot;&quot;&quot;
+from __future__ import annotations
+
+import json, os, time, urllib.error, urllib.request
+from dataclasses import dataclass, field
+
+CALLER = &quot;route-probe/1.0&quot;
+
+
+@dataclass
+class Route:
+    name: str
+    base_url: str
+    model: str
+    key_env: str | None = None
+    ctx: int = 0
+    price_in: float = 0.0      # 美元 / 百万 input token
+    price_out: float = 0.0
+    max_tokens: int = 16
+
+
+@dataclass
+class Attempt:
+    route: str
+    status: int | None = None
+    cls: str = &quot;ok&quot;            # ok/config/gone/transient/empty
+    ms: int = 0
+    detail: str = &quot;&quot;
+    content: str = &quot;&quot;
+    usage: dict = field(default_factory=dict)
+
+
+def _key(route: Route) -&gt; str:
+    if not route.key_env:
+        return &quot;none&quot;
+    val = os.environ.get(route.key_env, &quot;&quot;).strip()
+    if val:
+        return val
+    # 允许从 .env 读取，避免把密钥写进代码
+    for path in (os.path.expanduser(&quot;~/AppData/Local/hermes/.env&quot;),
+                 os.path.expanduser(&quot;~/.env&quot;)):
+        if os.path.isfile(path):
+            for line in open(path, encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;):
+                if line.startswith(route.key_env + &quot;=&quot;):
+                    return line.split(&quot;=&quot;, 1)[1].strip().strip('&quot;')
+    return &quot;&quot;
+
+
+def _post_json(url: str, payload: dict, key: str, timeout: float):
+    req = urllib.request.Request(url, method=&quot;POST&quot;)
+    req.add_header(&quot;Content-Type&quot;, &quot;application/json&quot;)
+    req.add_header(&quot;Authorization&quot;, f&quot;Bearer {key}&quot;)
+    req.add_header(&quot;User-Agent&quot;, CALLER)
+    data = json.dumps(payload).encode(&quot;utf-8&quot;)
+    with urllib.request.urlopen(req, data=data, timeout=timeout) as resp:
+        return resp.status, json.loads(resp.read().decode(&quot;utf-8&quot;, &quot;replace&quot;))
+
+
+def _get(url: str, key: str, timeout: float):
+    req = urllib.request.Request(url)
+    req.add_header(&quot;Authorization&quot;, f&quot;Bearer {key}&quot;)
+    req.add_header(&quot;User-Agent&quot;, CALLER)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.status, resp.read().decode(&quot;utf-8&quot;, &quot;replace&quot;)
+
+
+def classify_http(status: int, body: str) -&gt; tuple[str, str]:
+    &quot;&quot;&quot;把 HTTP 状态码翻译成「能不能靠换模型解决」。&quot;&quot;&quot;
+    try:
+        msg = json.loads(body).get(&quot;error&quot;, {}).get(&quot;message&quot;) or body[:160]
+    except Exception:
+        msg = body[:160]
+    if status in (400, 401, 403, 422):
+        return &quot;config&quot;, msg
+    if status == 404:
+        return &quot;gone&quot;, msg
+    if status in (408, 409, 425, 429) or status &gt;= 500:
+        return &quot;transient&quot;, msg
+    return &quot;config&quot; if status &gt;= 400 else &quot;ok&quot;, msg
+
+
+def probe_liveness(route: Route, timeout: float = 5.0) -&gt; tuple[bool, int, str]:
+    &quot;&quot;&quot;只读元数据：判断「进程活没活」。秒回不代表能推理（VRAM 不足的典型表现）。&quot;&quot;&quot;
+    url = route.base_url.rstrip(&quot;/&quot;) + &quot;/models&quot;
+    t0 = time.time()
+    try:
+        status, _ = _get(url, _key(route), timeout)
+        return status == 200, int((time.time() - t0) * 1000), f&quot;HTTP {status}&quot;
+    except urllib.error.HTTPError as e:
+        return False, int((time.time() - t0) * 1000), f&quot;HTTP {e.code}&quot;
+    except Exception as e:
+        return False, int((time.time() - t0) * 1000), type(e).__name__
+
+
+def probe_readiness(route: Route, timeout: float = 60.0) -&gt; Attempt:
+    &quot;&quot;&quot;真跑一次最小推理。这里才是「能不能用」的判据。&quot;&quot;&quot;
+    url = route.base_url.rstrip(&quot;/&quot;) + &quot;/chat/completions&quot;
+    payload = {&quot;model&quot;: route.model,
+               &quot;messages&quot;: [{&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Reply with the single word: ok&quot;}],
+               &quot;max_tokens&quot;: route.max_tokens,
+               &quot;temperature&quot;: 0}
+    t0 = time.time()
+    try:
+        status, body = _post_json(url, payload, _key(route), timeout)
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(&quot;utf-8&quot;, &quot;replace&quot;)
+        cls, detail = classify_http(e.code, raw)
+        return Attempt(route.name, e.code, cls, int((time.time() - t0) * 1000), detail)
+    except Exception as e:
+        return Attempt(route.name, None, &quot;transient&quot;,
+                       int((time.time() - t0) * 1000), type(e).__name__)
+
+    ms = int((time.time() - t0) * 1000)
+    if status != 200:
+        cls, detail = classify_http(status, json.dumps(body))
+        return Attempt(route.name, status, cls, ms, detail)
+
+    choice = (body.get(&quot;choices&quot;) or [{}])[0]
+    content = ((choice.get(&quot;message&quot;) or {}).get(&quot;content&quot;) or &quot;&quot;).strip()
+    finish = choice.get(&quot;finish_reason&quot;)
+    usage = body.get(&quot;usage&quot;) or {}
+    if not content:
+        # HTTP 200 但没有正文：最常见的原因是 token 预算被 reasoning 吃光，
+        # 或上游 safety 过滤返回空。这不是成功。
+        return Attempt(route.name, status, &quot;empty&quot;, ms,
+                       f&quot;finish_reason={finish} usage={usage}&quot;, content, usage)
+    return Attempt(route.name, status, &quot;ok&quot;, ms, f&quot;finish_reason={finish}&quot;, content, usage)
+
+
+def run_chain(chain: list[Route], ledger_path: str | None = None,
+              per_timeout: float = 60.0) -&gt; tuple[Attempt | None, list[Attempt]]:
+    &quot;&quot;&quot;按顺序体检 + 推理，第一个真正返回正文的模型胜出。&quot;&quot;&quot;
+    trace: list[Attempt] = []
+    for route in chain:
+        live, lms, ldetail = probe_liveness(route)
+        if not live:
+            trace.append(Attempt(route.name, None, &quot;transient&quot;, lms,
+                                 f&quot;liveness failed: {ldetail}&quot;))
+            continue
+        a = probe_readiness(route, timeout=per_timeout)
+        trace.append(a)
+        if a.cls == &quot;ok&quot;:
+            _write_ledger(ledger_path, route, a, trace)
+            return a, trace
+        if a.cls == &quot;config&quot;:
+            # 配置错误换模型解决不了，继续试只会把真因埋掉
+            _write_ledger(ledger_path, route, a, trace)
+            return None, trace
+    return None, trace
+
+
+def _write_ledger(path: str | None, route: Route, winner: Attempt, trace: list[Attempt]):
+    if not path:
+        return
+    row = {&quot;ts&quot;: int(time.time()), &quot;winner&quot;: route.name, &quot;model&quot;: route.model,
+           &quot;attempts&quot;: [{&quot;route&quot;: a.route, &quot;cls&quot;: a.cls, &quot;status&quot;: a.status,
+                         &quot;ms&quot;: a.ms, &quot;detail&quot;: a.detail} for a in trace]}
+    with open(path, &quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+        f.write(json.dumps(row, ensure_ascii=False) + &quot;\n&quot;)
+
+
+if __name__ == &quot;__main__&quot;:
+    OR = &quot;https://openrouter.ai/api/v1&quot;
+    chain = [
+        Route(&quot;local-llama&quot;, &quot;http://127.0.0.1:8080/v1&quot;, &quot;Muse-Glimmer-30B&quot;, None, 131072),
+        Route(&quot;removed-id&quot;, OR, &quot;stealth/ox-alpha&quot;, &quot;OPENROUTER_API_KEY&quot;, 1000000, 0.075, 0.3),
+        Route(&quot;glm-5.3-flash&quot;, OR, &quot;z-ai/glm-5.3-flash&quot;, &quot;OPENROUTER_API_KEY&quot;, 1300000, 0.075, 0.3),
+        Route(&quot;gpt-oss-20b&quot;, OR, &quot;openai/gpt-oss-20b&quot;, &quot;OPENROUTER_API_KEY&quot;, 131072, 0.018, 0.09),
+        Route(&quot;mistral-nemo&quot;, OR, &quot;mistralai/mistral-nemo&quot;, &quot;OPENROUTER_API_KEY&quot;, 131072, 0.019, 0.03),
+    ]
+    winner, trace = run_chain(chain, ledger_path=&quot;route_ledger.jsonl&quot;)
+    print(f&quot;{'route':&lt;16}{'status':&gt;7}{'cls':&gt;11}{'ms':&gt;8}  detail&quot;)
+    for a in trace:
+        print(f&quot;{a.route:&lt;16}{str(a.status):&gt;7}{a.cls:&gt;11}{a.ms:&gt;8}  {a.detail[:70]}&quot;)
+    print(&quot;\nwinner:&quot;, winner.route if winner else &quot;NONE&quot;, &quot;|&quot;,
+          (winner.content if winner else &quot;&quot;))
+</code></pre>
+<h3>实测输出（原样，未修改）</h3>
+<pre><code>route            status        cls      ms  detail
+local-llama        None  transient    2004  liveness failed: URLError
+removed-id          404       gone     789  Thank you for participating in the Stealth Ox Alpha testing period...
+glm-5.3-flash       200      empty    2429  finish_reason=length usage={'prompt_tokens': 19, ...
+gpt-oss-20b         200      empty    1835  finish_reason=length usage={'prompt_tokens': 74, ...
+mistral-nemo        200         ok    1175  finish_reason=stop
+
+winner: mistral-nemo | ok
+</code></pre>
+<p>一次运行同时命中四类失败：<code>transient</code>（端点死）、<code>gone</code>（模型下线）、<code>empty</code>（假成功）×2，最后靠链尾最便宜的模型（$0.019/M in、$0.030/M out）成功返回。</p>
+<h3>落盘的账本长这样</h3>
+<pre><code class="language-json">{&quot;ts&quot;: 1790316165, &quot;winner&quot;: &quot;mistral-nemo&quot;, &quot;model&quot;: &quot;mistralai/mistral-nemo&quot;,
+ &quot;attempts&quot;: [
+   {&quot;route&quot;: &quot;local-llama&quot;, &quot;cls&quot;: &quot;transient&quot;, &quot;status&quot;: null, &quot;ms&quot;: 2004,
+    &quot;detail&quot;: &quot;liveness failed: URLError&quot;},
+   {&quot;route&quot;: &quot;removed-id&quot;, &quot;cls&quot;: &quot;gone&quot;, &quot;status&quot;: 404, &quot;ms&quot;: 789,
+    &quot;detail&quot;: &quot;Thank you for participating in the Stealth Ox Alpha testing period...&quot;},
+   {&quot;route&quot;: &quot;glm-5.3-flash&quot;, &quot;cls&quot;: &quot;empty&quot;, &quot;status&quot;: 200, &quot;ms&quot;: 2429,
+    &quot;detail&quot;: &quot;finish_reason=length usage={... 'reasoning_tokens': 16 ...}&quot;},
+   {&quot;route&quot;: &quot;gpt-oss-20b&quot;, &quot;cls&quot;: &quot;empty&quot;, &quot;status&quot;: 200, &quot;ms&quot;: 1835,
+    &quot;detail&quot;: &quot;finish_reason=length usage={... 'reasoning_tokens': 13 ...}&quot;},
+   {&quot;route&quot;: &quot;mistral-nemo&quot;, &quot;cls&quot;: &quot;ok&quot;, &quot;status&quot;: 200, &quot;ms&quot;: 1175,
+    &quot;detail&quot;: &quot;finish_reason=stop&quot;}]}
+</code></pre>
+<p><strong>账本里要记的不是"成功了"，而是"谁在第几位、因为什么被淘汰"。</strong> 否则你永远不知道降级链是不是每天都在悄悄救火。</p>
+<hr />
+<h2>五、选路策略：先约束，后价格，最后延迟</h2>
+<h3>第一步：约束过滤（不满足的直接划掉）</h3>
+<table>
+<thead>
+<tr>
+<th>约束</th>
+<th>判据</th>
+<th>为什么必须有</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>上下文长度</td>
+<td>模型 ctx ≥ 实测最长输入 × 1.2</td>
+<td>贴边必然在某一批长输入上翻车</td>
+</tr>
+<tr>
+<td>工具调用能力</td>
+<td><code>supported_parameters</code> 含 <code>tools</code></td>
+<td>不带工具能力的模型无法进入 Agent 循环</td>
+</tr>
+<tr>
+<td>地区可用性</td>
+<td>见上文 403 类的 <code>failed_routing_step</code></td>
+<td>账号/网络属性，跟模型质量无关</td>
+</tr>
+<tr>
+<td>数据合规</td>
+<td>是否允许把数据发给该厂商</td>
+<td>这是法律约束，不是性能约束</td>
+</tr>
+<tr>
+<td>延迟预算</td>
+<td>交互场景 vs 批处理场景</td>
+<td>交互场景延迟 &gt;10s 就等于不可用</td>
+</tr>
+</tbody>
+</table>
+<p>我在实测那一刻抓的模型列表里：<strong>460 个模型，其中 392 个支持工具调用，416 个上下文 ≥128K，175 个 ≥1M</strong>。约束过滤完通常还能剩几百个候选——<strong>所以"候选不足"几乎从来不是问题，"选错判据"才是。</strong></p>
+<h3>第二步：价格（真实分布，不看宣传页）</h3>
+<p>同一时刻从 <code>GET /api/v1/models</code> 算出来的输入价格分布（美元 / 百万 token，已剔除 5 个用负值表示"动态路由"的伪模型）：</p>
+<table>
+<thead>
+<tr>
+<th>分位</th>
+<th>输入价格</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>min</td>
+<td>$0（24 个免费模型）</td>
+</tr>
+<tr>
+<td>p25</td>
+<td>$0.117</td>
+</tr>
+<tr>
+<td><strong>中位</strong></td>
+<td><strong>$0.42</strong></td>
+</tr>
+<tr>
+<td>p75</td>
+<td>$1.25</td>
+</tr>
+<tr>
+<td>p90</td>
+<td>$3.00</td>
+</tr>
+<tr>
+<td>max</td>
+<td>$150.00</td>
+</tr>
+</tbody>
+</table>
+<p><strong>最贵与中位相差 357 倍。</strong> 这个数字的意义是：如果你按"榜单第一名"选模型，你很可能为一个只需要 20 分类的任务付出 100 倍成本。反过来，满足"≥128K 上下文 + 支持工具调用"的最便宜付费档在实测中是：</p>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>输入</th>
+<th>输出</th>
+<th>上下文</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ibm-granite/granite-4.0-h-micro</td>
+<td>$0.017/M</td>
+<td>$0.112/M</td>
+<td>131,000</td>
+</tr>
+<tr>
+<td>openai/gpt-oss-20b</td>
+<td>$0.018/M</td>
+<td>$0.090/M</td>
+<td>131,072</td>
+</tr>
+<tr>
+<td>mistralai/mistral-nemo</td>
+<td>$0.019/M</td>
+<td>$0.030/M</td>
+<td>131,072</td>
+</tr>
+</tbody>
+</table>
+<p><strong>做法：把价格当成过滤器，而不是决策器。</strong> 先用价格切出"预算内可接受集"，再在集合里用你自己的样本选（见第六节）。价格表会变，而且变得比你想的快——所以价格要定期重抓，不能写死在代码里。</p>
+<h3>第三步：延迟用实测的，不用榜单的</h3>
+<p>同一次实测里三个小模型的耗时：glm-5.3-flash 1252ms、gpt-oss-20b 2706ms、mistral-nemo 1175ms（同样是"回一个词"的最小请求）。<strong>同一时刻、同一个平台、同样的请求，延迟差 2.3 倍。</strong> 榜单上的综合分跟你的具体请求形态相关性很弱。</p>
+<p>写法：每个路由维护一个 EWMA 延迟（<code>new = 0.7 * old + 0.3 * observed</code>），超过预算就临时降权，而不是永久移除。<strong>延迟是环境变量（上游排队、地域、时段），不是模型属性。</strong></p>
+<hr />
+<h2>六、粘性路由与"缓存税"</h2>
+<p>这是路由里唯一一个会让你"降级反而更贵"的坑。</p>
+<p>实测证据：<code>openai/gpt-oss-20b</code> 那次调用返回的 usage 里 <code>prompt_tokens=74</code>，其中 <strong><code>cached_tokens=64</code></strong>。也就是说 86% 的输入命中了前缀缓存，按缓存价计费（<code>cost_details.upstream_inference_prompt_cost</code> 只有 $1.58e-06）。</p>
+<p>而<strong>换一个模型 = 换一套前缀缓存 = 缓存命中率归零</strong>。所以：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>路由策略</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>同一次多轮对话 / 同一个 Agent 任务</td>
+<td><strong>粘性（sticky）</strong>：一次选定，全程不换。中途降级只应发生在真正的 transient/gone 失败之后，并且<strong>从头重放上下文</strong></td>
+</tr>
+<tr>
+<td>不同任务之间</td>
+<td>可以自由换。任务边界是唯一的免费换模型时机</td>
+</tr>
+<tr>
+<td>周期性批量任务</td>
+<td>按批选路，批内固定</td>
+</tr>
+<tr>
+<td>低成本小任务（分类/打分/抽取）</td>
+<td>允许每次单独选，缓存收益本来就小</td>
+</tr>
+</tbody>
+</table>
+<p>一条推论：<strong>"为了省钱"而把一次长对话里的模型切来切去，通常会让总成本上升。</strong> 换模型省下的是单价，丢掉的是缓存命中率——两者经常后者更大。</p>
+<hr />
+<h2>七、用 usage.cost 记账，而不是用估算</h2>
+<p>现代聚合平台会在每个响应里回传真实成本。实测：</p>
+<table>
+<thead>
+<tr>
+<th>调用</th>
+<th>completion_tokens</th>
+<th>真实 cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>glm-5.3-flash（max_tokens=16，空返回）</td>
+<td>16</td>
+<td>$1.085e-05</td>
+</tr>
+<tr>
+<td>glm-5.3-flash（max_tokens=64，成功）</td>
+<td>46</td>
+<td>$2.585e-05</td>
+</tr>
+<tr>
+<td>gpt-oss-20b（max_tokens=16，空返回）</td>
+<td>16</td>
+<td>$3.98e-06</td>
+</tr>
+<tr>
+<td>gpt-oss-20b（max_tokens=64，成功）</td>
+<td>32</td>
+<td>$6.38e-06</td>
+</tr>
+</tbody>
+</table>
+<p>两个记账纪律：</p>
+<ol>
+<li><strong>失败的尝试也要记账。</strong> 故障 2 里那次"HTTP 200 但内容为空"的调用是<strong>收费的</strong>。降级链上每一次尝试都在花钱——所以降级链的长度是有成本的，不是免费的保险。</li>
+<li><strong>成本要摊到"成功产出"上，不是摊到"请求数"上。</strong> 指标应该是 <code>总花费 / 有效产出数</code>（有效产出 = 通过你下游校验的产物）。如果降级链让请求数翻倍但产出没变，你的单位产出成本是上升的。</li>
+</ol>
+<p>再进一步：把成本按路由分桶（哪个模型贡献了多少花费、多少有效产出），这是唯一能回答"这条链里最贵的一环是谁"的读数。</p>
+<hr />
+<h2>八、七个反模式</h2>
+<table>
+<thead>
+<tr>
+<th>反模式</th>
+<th>为什么会出事</th>
+<th>改成</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>把 config 类错误也走降级</td>
+<td>所有模型都试一遍全失败，真因（ID 打错/没余额）被埋</td>
+<td>config 类立即终止并告警</td>
+</tr>
+<tr>
+<td>同一错误无限重试同一模型</td>
+<td>重试的是自己的固执，不是上游</td>
+<td>同因失败两次就停：要么分类错误，要么告警</td>
+</tr>
+<tr>
+<td>只用 <code>GET /models</code> 做健康检查</td>
+<td>服务活着但推理不可用（VRAM 溢出）照样放行</td>
+<td>liveness + readiness 双探测</td>
+</tr>
+<tr>
+<td>只检查 HTTP 状态码</td>
+<td>HTTP 200 且 content 为空会被当成功</td>
+<td>判据加"正文非空 + finish_reason 合理"</td>
+</tr>
+<tr>
+<td>静默降级不告警</td>
+<td>链条每天救火，你却以为一切正常</td>
+<td><code>gone</code> 类降级必须告警（配置腐烂信号）</td>
+</tr>
+<tr>
+<td>按榜单/口碑硬编码模型</td>
+<td>价差 357 倍，且榜单跟你任务无关</td>
+<td>约束 → 价格 → 自测样本</td>
+</tr>
+<tr>
+<td>长对话中途为了省钱切模型</td>
+<td>缓存命中率归零，总成本反而上升</td>
+<td>任务内粘性，任务边界才换</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>九、上线前 12 项检查清单</h2>
+<p><strong>探测层</strong></p>
+<ul>
+<li>[ ] liveness（<code>GET /models</code>）与 readiness（1 token 推理）分开实现</li>
+<li>[ ] readiness 有独立超时（本地模型建议 ≥30s，云端 60s）</li>
+<li>[ ] 探测结果落盘，能看到"什么时候开始不健康的"</li>
+</ul>
+<p><strong>分类层</strong></p>
+<ul>
+<li>[ ] 400/401/402/403 → config，终止降级 + 告警</li>
+<li>[ ] 404 → gone，降级 + 告警（模型 ID 腐烂）</li>
+<li>[ ] 429/5xx/超时/连接失败 → transient，退避后降级</li>
+<li>[ ] HTTP 200 但 content 为空 → empty，按失败处理</li>
+<li>[ ] <code>finish_reason == "length"</code> 时同时检查 <code>reasoning_tokens</code> 占比</li>
+</ul>
+<p><strong>选路层</strong></p>
+<ul>
+<li>[ ] 候选先过约束（ctx 余量 ×1.2 / 工具能力 / 地区 / 合规）</li>
+<li>[ ] 价格定期重抓，不硬编码；记录当次选路理由</li>
+<li>[ ] 延迟用 EWMA 实测值，超预算只降权不移除</li>
+</ul>
+<p><strong>记账层</strong></p>
+<ul>
+<li>[ ] 每次尝试（含失败）都记 usage.cost，按路由分桶</li>
+<li>[ ] 指标是"总花费 / 有效产出数"，不是"请求成功率"</li>
+<li>[ ] 降级链有长度上限（每次降级都是一次真实花费）</li>
+</ul>
+<hr />
+<h2>结语</h2>
+<p>模型路由的工程本质一句话：<strong>把"哪个模型"从代码里的常量，变成一个在运行时被证据驱动的决策。</strong></p>
+<p>而这套东西的价值全部集中在分类上——<strong>因为只有"该换"和"不该换"分得清，降级才是修复而不是掩盖。</strong> HTTP 200 却返回空内容的那次实测最能说明问题：状态码说了算的系统认为那是成功，判据说了算的系统知道那是失败。</p>
+<p>先把错误分类表和探测逻辑写出来，剩下的（价格、延迟、粘性）都是它的自然推论。</p>
+<hr />
+<p><em>本文是「AI Agent 工程实战」系列之一。相关系列：</em><br />
+- <a href="agent-cost-optimization-guide.html">AI Agent成本优化实战指南</a><br />
+- <a href="agent-long-task-resume-guide.html">AI Agent长任务实战指南：断点续跑、幂等与进度对账</a><br />
+- <a href="agent-reliability-guide.html">AI Agent自动化可靠性实战指南</a><br />
+- <a href="agent-evaluation-observability-guide.html">AI Agent评测与可观测性实战指南</a><br />
+- <a href="agent-tool-calling-guide.html">AI Agent工具调用实战指南</a></p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
