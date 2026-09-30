@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-record-replay-tape-guide": {
+        "title": "AI Agent调试成本控制实战：工具调用磁带（record-replay）与行为漂移检出",
+        "description": "2026年AI Agent调试工程实战（全部数字为本机实跑输出）：工具调用磁带record-replay设计——append-only JSONL七字段（seq/tool/key/args/result/ms/side_effect）、缓存键=工具名+规范化参数哈希、三种事件区分（命中/漂移TapeDrift/落空TapeMiss）、严格模式与replay+record补录模式对比、副作用短路（回放实测live_tool_calls=0/real_side_effects=0）、五种规范化用例实测（dict键序·首尾空白·全角空格U+3000·数字vs字符串·布尔vs整数）、五轮演示真实输出（录制252.68ms→回放0.06ms）、注入式回放离线复现上游500降级分支、Windows文本模式CRLF导致工具自报70字节而磁盘72字节的真实字节差异、磁带边界声明（不做验收测试/会固化上游漂移）、与monkeypatch/HTTP层录制/fixture五种方案对比、七个反模式、上线前12项检查清单。",
+        "keywords": "Agent调试,record replay,磁带回放,工具调用录制,行为漂移,drift检测,回归测试,确定性调试,JSONL磁带,参数指纹,规范化canonicalization,mock副作用,注入式回放,CI断言,Agent工程,LLM成本控制",
+    },
     "agent-model-routing-guide": {
         "title": "AI Agent模型路由实战指南：健康探测、错误分类与降级链",
         "description": "2026年AI Agent多模型路由实战（全部数据实测）：liveness与readiness双探测设计（端点活着≠能推理）、五类错误分类表附带真实响应体（400 invalid model ID / 403地区限制含routing_funnel归因 / 404模型下线墓碑文案 / 429 / 5xx / 超时）、HTTP 200但content为空的假成功（reasoning_tokens吃光token预算，16→64复现验证）、约150行可跑的route_probe.py降级链脚本与实测trace、先约束后价格再延迟的选路策略、OpenRouter 460个模型真实价格分布（中位$0.42/M、p90 $3.00/M、357倍价差、24个免费、175个≥1M上下文）、粘性路由与提示词缓存税（cached_tokens实测）、按usage.cost记账、七个反模式、12项上线检查清单。",
