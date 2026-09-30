@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent调试成本控制实战：工具调用磁带（record-replay）与行为漂移检出</title>
+    <meta name="description" content="2026年AI Agent调试工程实战（全部数字为本机实跑输出）：工具调用磁带record-replay设计——append-only JSONL七字段（seq/tool/key/args/result/ms/side_effect）、缓存键=工具名+规范化参数哈希、三种事件区分（命中/漂移TapeDrift/落空TapeMiss）、严格模式与replay+record补录模式对比、副作用短路（回放实测live_tool_calls=0/real_side_effects=0）、五种规范化用例实测（dict键序·首尾空白·全角空格U+3000·数字vs字符串·布尔vs整数）、五轮演示真实输出（录制252.68ms→回放0.06ms）、注入式回放离线复现上游500降级分支、Windows文本模式CRLF导致工具自报70字节而磁盘72字节的真实字节差异、磁带边界声明（不做验收测试/会固化上游漂移）、与monkeypatch/HTTP层录制/fixture五种方案对比、七个反模式、上线前12项检查清单。">
+    <meta name="keywords" content="Agent调试,record replay,磁带回放,工具调用录制,行为漂移,drift检测,回归测试,确定性调试,JSONL磁带,参数指纹,规范化canonicalization,mock副作用,注入式回放,CI断言,Agent工程,LLM成本控制">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-record-replay-tape-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent调试成本控制实战：工具调用磁带（record–replay）与行为漂移检出</h1>
+<blockquote>
+<p>你有没有过这种时刻：一个 4 步的 Agent 流程跑到第 3 步报错，你想改一行重试一次，结果<strong>每一次复现都要重新花一遍 token、重新等一遍网络、重新触发一遍写操作</strong>。改 10 次就烧 10 次。<br />
+这篇文章讲的是<strong>工具调用磁带</strong>（record–replay）：把一次真实会话的每一次工具调用按顺序录进一个 append-only 的 JSONL 文件，之后离线回放——工具一次都不跑，但流程逐步走完。文中所有数字都来自本页附带的 <code>tape.py</code> + <code>demo.py</code> 在本机实跑的输出（2026-09-30）。</p>
+</blockquote>
+<hr />
+<h2>一、先说结论</h2>
+<ol>
+<li><strong>Agent 调试贵，不是因为模型贵，是因为"复现"这件事被设计成了要花钱。</strong> 你的工具调用没有录制层，所以每次调试都是全量真跑：真网络、真写盘、真计费。</li>
+<li><strong>磁带的第一价值不是省钱，是让"行为漂移"可见。</strong> 回放时，如果同一个序号位置上模型换成了不同的参数，磁带会直接报 <code>TapeDrift</code>，并把两个指纹和两份参数摆在一起。这是回归测试里最难抓的一类 bug——模型没报错、流程没报错、结果看起来也对，只是参数悄悄变了。</li>
+<li><strong>磁带必须短路副作用。</strong> 回放模式下写盘、发消息、下单这些动作一次都不能发生，否则"离线回放"就是在离线的壳子里继续改真实世界。</li>
+</ol>
+<hr />
+<h2>二、三个根因：为什么 Agent 的 bug 特别难复现</h2>
+<table>
+<thead>
+<tr>
+<th>根因</th>
+<th>具体表现</th>
+<th>磁带怎么解</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>非确定性</strong></td>
+<td>同一个 prompt 两次运行的工具参数不完全一样（措辞、顺序、多了个字段）</td>
+<td>按"工具名 + 规范化参数哈希"索引，参数变了就报漂移，而不是静默返回旧结果</td>
+</tr>
+<tr>
+<td><strong>外部副作用</strong></td>
+<td>写文件、发消息、提交表单——重跑一次就多一份真实垃圾</td>
+<td>回放模式短路：命中磁带直接返回录制的返回值，<code>fn(**args)</code> 根本不执行</td>
+</tr>
+<tr>
+<td><strong>时间与金钱</strong></td>
+<td>4 步工具链里只要有一处调 LLM，重跑就是真花钱 + 真等待</td>
+<td>命中磁带即返回，实测从 252 ms 掉到 0.06 ms</td>
+</tr>
+</tbody>
+</table>
+<p>第三条容易被低估。它不只是"省"，而是<strong>改变了调试的节奏</strong>：当你改一行代码验证一次的成本从 20 秒变成 20 毫秒，你才会真的去做小步验证，而不是"攒一堆改动一次跑完看运气"。</p>
+<hr />
+<h2>三、磁带长什么样</h2>
+<p>一行一条调用，append-only，纯 JSON。这是本机实跑后磁带里的真实首行（截断展示）：</p>
+<pre><code class="language-json">{&quot;args&quot;: {&quot;url&quot;: &quot;https://example.com/agent-long-task&quot;}, &quot;clock&quot;: null,
+ &quot;key&quot;: &quot;fetch_doc:d3ad8a5ee74b&quot;, &quot;ms&quot;: 60.34,
+ &quot;result&quot;: {&quot;status&quot;: 200, &quot;text&quot;: &quot;agent 长任务需要账本，agent 长任务需要账本，…&quot;},
+ &quot;seq&quot;: 1, &quot;side_effect&quot;: false, &quot;tool&quot;: &quot;fetch_doc&quot;}
+</code></pre>
+<p>字段就七个，每一个都有明确用途：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>作用</th>
+<th>少了它会怎样</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seq</code></td>
+<td>调用在会话里的序号</td>
+<td>无法区分"参数变了"（漂移）和"多了一步"（落空）</td>
+</tr>
+<tr>
+<td><code>tool</code></td>
+<td>工具名</td>
+<td>指纹碰撞（不同工具同名参数）</td>
+</tr>
+<tr>
+<td><code>key</code></td>
+<td><code>工具名:参数规范化哈希前12位</code></td>
+<td>查找只能靠顺序，插一步就错位</td>
+</tr>
+<tr>
+<td><code>args</code></td>
+<td>脱敏后的参数原文</td>
+<td>漂移时报出来只有哈希，人看不懂</td>
+</tr>
+<tr>
+<td><code>result</code></td>
+<td>返回值</td>
+<td>没法回放</td>
+</tr>
+<tr>
+<td><code>ms</code></td>
+<td>真实耗时</td>
+<td>没法回答"这次慢在哪一步"</td>
+</tr>
+<tr>
+<td><code>side_effect</code></td>
+<td>这一步是否改真实世界</td>
+<td>回放时无法单独审计副作用</td>
+</tr>
+</tbody>
+</table>
+<p><strong>注意 <code>args</code> 存的是脱敏后的原文</strong>：录制内容是要进 git、要被 review 的。</p>
+<hr />
+<h2>四、三个设计决定</h2>
+<h3>决定一：缓存键必须是"工具名 + 规范化参数哈希"，不是序号</h3>
+<p>序号做键的磁带，插一步就全线错位，而且无法回答"这次和上次哪个参数变了"。用哈希做键，再保留 <code>seq</code> 做漂移判断，两个问题一起解决：</p>
+<pre><code class="language-python">def canon(obj):
+    &quot;&quot;&quot;稳定规范化：dict 按键排序、字符串去首尾空白、丢 None、浮点统一。&quot;&quot;&quot;
+    if isinstance(obj, dict):
+        return {k: canon(v) for k, v in sorted(obj.items()) if v is not None}
+    if isinstance(obj, list):
+        return [canon(v) for v in obj]
+    if isinstance(obj, str):
+        return obj.strip()
+    if isinstance(obj, float):
+        return round(obj, 6)
+    return obj
+
+def call_key(tool, args):
+    payload = json.dumps(canon(args), ensure_ascii=False,
+                         sort_keys=True, separators=(&quot;,&quot;, &quot;:&quot;))
+    return tool + &quot;:&quot; + hashlib.sha256(payload.encode(&quot;utf-8&quot;)).hexdigest()[:12]
+</code></pre>
+<h3>决定二：规范化不是可选项（五个用例实测）</h3>
+<p>不规范化会怎样？我写了个对照脚本，同一个调用、不同写法，分别用"朴素哈希"和"规范化哈希"算指纹：</p>
+<pre><code>用例                         朴素指纹一致?        canon指纹一致?
+dict 键序不同（语义相同）          False            True
+字符串首尾空白                  False            True
+数字 vs 字符串                False            False
+布尔 vs 整数                 False            False
+全角空格 U+3000              False            True
+</code></pre>
+<p>朴素指纹下，同一份参数只是 Python 字典插入顺序不同，就会算出两个完全不同的键：</p>
+<pre><code>朴素:  t:9d57a9e5901d   /   t:a8076e39a4c2      ← 同一次调用，两个键
+规范:  t:2867182ebeac   /   t:2867182ebeac      ← 同一个键
+</code></pre>
+<p><strong>但有两类差异必须保留，绝不能"规整"掉</strong>：<code>3</code> 和 <code>"3"</code>、<code>True</code> 和 <code>1</code>，规范化后依然是两个不同的键。这是故意的——它们对被调工具来说真的是两种输入，静默合并等于把一类真实漂移藏起来。</p>
+<p>顺带一个<strong>实测推翻猜想</strong>的例子：我原本以为全角空格 U+3000 需要自己处理，测下来 Python 的 <code>str.strip()</code> 已经按 Unicode 空白处理了它（<code>'agent　'.strip()</code> 长度 5）。这就是为什么要测不要猜。</p>
+<h3>决定三：命中、漂移、落空是三种不同的事件</h3>
+<p>回放时的三种情况必须分开处理，混在一起就退化成"一个会骗人的缓存"：</p>
+<table>
+<thead>
+<tr>
+<th>情况</th>
+<th>判断依据</th>
+<th>严格模式行为</th>
+<th>补录模式行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>命中</strong></td>
+<td>参数哈希在磁带里存在且未被消费</td>
+<td>返回录制结果</td>
+<td>返回录制结果</td>
+</tr>
+<tr>
+<td><strong>漂移</strong></td>
+<td><code>seq</code> 位置有记录，但参数哈希不同</td>
+<td>抛 <code>TapeDrift</code>（含两份指纹与参数）</td>
+<td>抛 <code>TapeDrift</code></td>
+</tr>
+<tr>
+<td><strong>落空</strong></td>
+<td>该哈希磁带里没有</td>
+<td>抛 <code>TapeMiss</code></td>
+<td><strong>真跑一次并追加进磁带</strong></td>
+</tr>
+</tbody>
+</table>
+<p>漂移永远不自动补录——它是"你的 Agent 行为变了"这个信号本身，自动放行等于把回归信号静默掉。</p>
+<hr />
+<h2>五、实测：五轮演示的真实输出</h2>
+<p>用一个 4 步工具链：<code>fetch_doc</code>（网络）→ <code>search_index</code>（检索）→ <code>summarize</code>（LLM，唯一花钱的一步）→ <code>write_report</code>（写盘，真实副作用）。</p>
+<h3>PASS 1 录制</h3>
+<pre><code>结果: {&quot;bytes&quot;: 70, &quot;file&quot;: &quot;report.md&quot;}
+统计: {&quot;mode&quot;: &quot;record&quot;, &quot;steps&quot;: 4, &quot;tape_hits&quot;: 0, &quot;tape_misses&quot;: 0,
+      &quot;live_tool_calls&quot;: 4, &quot;real_side_effects&quot;: 1, &quot;drift_events&quot;: 0}
+墙钟 252.68 ms   超参数花费 $0.012   磁带行数 4
+真实副作用: report.md 72 bytes
+</code></pre>
+<h3>PASS 2 回放（先删掉产物文件）</h3>
+<pre><code>结果与录制逐字节一致: True
+统计: {&quot;mode&quot;: &quot;replay&quot;, &quot;steps&quot;: 4, &quot;tape_hits&quot;: 4, &quot;tape_misses&quot;: 0,
+      &quot;live_tool_calls&quot;: 0, &quot;real_side_effects&quot;: 0, &quot;drift_events&quot;: 0}
+墙钟 0.06 ms   超参数花费 $0    report.md 被重新写了吗: False
+</code></pre>
+<p>四个数字合起来才是完整证明：<code>live_tool_calls: 0</code>（工具没跑）、<code>real_side_effects: 0</code>（没写盘）、<code>True</code>（结果一致）、<code>False</code>（产物文件确实没被重建）。<strong>少了任何一个，你都无法排除"它其实偷偷跑了一遍"。</strong></p>
+<p>（性能差 252.68 ms → 0.06 ms 约 4200 倍，其中绝大部分是我在模拟工具里故意 <code>sleep</code> 的时间；真实场景里省下的是网络往返和 LLM 延迟，量级更大。）</p>
+<h3>PASS 3 漂移检出</h3>
+<p>把 <code>max_words</code> 从 120 改成 80（模拟"我改了提示词模板里的一个参数"），同一个序号位置上参数变了：</p>
+<pre><code>TapeDrift 捕获:
+  step 3: summarize 参数漂移
+    recorded summarize:b70a2846e594 {&quot;max_words&quot;: 120, &quot;text&quot;: &quot;agent 长任务需要账本，…(+528字)&quot;}
+    replayed summarize:0ebe14ad758f {&quot;max_words&quot;: 80,  &quot;text&quot;: &quot;agent 长任务需要账本，…(+528字)&quot;}
+统计: {&quot;steps&quot;: 3, &quot;tape_hits&quot;: 2, &quot;live_tool_calls&quot;: 0, &quot;drift_events&quot;: 1}
+</code></pre>
+<p>报错里同时给了<strong>位置（step 3）、工具、两个指纹、两份参数</strong>。这就是回归测试想要的东西——不是"失败了"，而是"第 3 步的 <code>max_words</code> 从 120 变成 80"。</p>
+<h3>PASS 4 落空：严格 vs 补录</h3>
+<p>v3 在末尾多加了一步检索：</p>
+<pre><code>严格模式 -&gt; step 5: 磁带里没有 search_index 的这条调用（search_index:361f878a5b5b）
+统计: {&quot;mode&quot;: &quot;replay&quot;, &quot;steps&quot;: 5, &quot;tape_hits&quot;: 4, &quot;tape_misses&quot;: 1, &quot;live_tool_calls&quot;: 0}
+
+补录模式结果: {&quot;bytes&quot;: 70, &quot;file&quot;: &quot;report.md&quot;}
+统计: {&quot;mode&quot;: &quot;replay+record&quot;, &quot;steps&quot;: 5, &quot;tape_hits&quot;: 4, &quot;tape_misses&quot;: 1, &quot;live_tool_calls&quot;: 1}
+磁带行数: 5
+</code></pre>
+<p><strong>注意补录模式下 <code>live_tool_calls: 1</code></strong> ——只有新加的那一步真跑了，已录制的 4 步依然走磁带。这让"边开发边跑测试"变成增量成本：改一步只付一步的钱。</p>
+<h3>PASS 5 注入式回放：离线复现降级分支</h3>
+<p>把 <code>fetch_doc</code> 的返回改成上游 500，看降级分支是否符合预期：</p>
+<pre><code>结果: {&quot;mode&quot;: &quot;degraded&quot;, &quot;reason&quot;: &quot;上游 500&quot;}
+统计: {&quot;mode&quot;: &quot;replay&quot;, &quot;steps&quot;: 1, &quot;tape_hits&quot;: 1, &quot;live_tool_calls&quot;: 0, &quot;real_side_effects&quot;: 0}
+降级分支没有产生副作用: True
+</code></pre>
+<p><strong>错误分支是最难在真实环境里复现的东西</strong>（上游不故障你就测不到），而磁带里改一个返回值就能随时随地复现，且副作用为零。</p>
+<hr />
+<h2>六、一个真实的字节数差异（顺手抓到的）</h2>
+<p>PASS 1 里工具自报 <code>bytes: 70</code>，磁盘上是 <code>72</code> 字节。原因不是 bug：Windows 文本模式写文件会把 <code>\n</code> 翻译成 <code>\r\n</code>，多出 2 个字节；磁盘尾部实测是 <code>b'…\xe6\x9d\xa1\r\n'</code>。</p>
+<p>这条对磁带的启示是：<strong>判断"产物对不对"要用回读磁盘的真实字节数，不要用工具自报的数字。</strong> 工具自报的数字是"它以为自己写了什么"，磁盘上的才是"实际存在什么"——这是所有假成功检查的同一个道理。</p>
+<hr />
+<h2>七、磁带不做什么（边界声明）</h2>
+<p>这一节比前面所有节都重要，因为它决定了你会不会用错：</p>
+<ul>
+<li><strong>磁带不验证工具本身的正确性。</strong> 它只保证"每次运行调用顺序与参数一致"。工具真的返回错了，磁带会忠实地把错误回放一百遍。</li>
+<li><strong>磁带会静默固化上游漂移。</strong> 上游数据变了、接口语义变了，磁带里存的还是旧数据，回放一路绿灯。所以：<strong>磁带适合回归测试，不能当验收测试。</strong></li>
+<li><strong>最终验收必须至少一次真跑。</strong> 我的做法是：日常回归全走磁带（秒级、零成本），发布前跑一遍全真链路（<code>mode=record</code>）并和磁带比对漂移数与结果差异。</li>
+<li><strong>不适合带时效性的工具。</strong> 查实时行情、查余额、查库存这类调用，回放结果天然过期，要么别录，要么在磁带元数据里带过期时间戳并在回放时告警。</li>
+</ul>
+<hr />
+<h2>八、和相邻方案对比</h2>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>覆盖范围</th>
+<th>优点</th>
+<th>短板</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>本页磁带</strong></td>
+<td>任意工具函数（HTTP、DB、文件、LLM）</td>
+<td>零依赖、可读可 review、漂移检测、副作用短路</td>
+<td>需要你显式包一层 <code>tape.call()</code></td>
+</tr>
+<tr>
+<td>monkeypatch / 手写 mock</td>
+<td>单个函数</td>
+<td>简单</td>
+<td>无录制，参数一变假测试照样"通过"</td>
+</tr>
+<tr>
+<td>HTTP 层录制（vcr 类库）</td>
+<td>只覆盖 HTTP</td>
+<td>对网络层透明</td>
+<td>覆盖不到文件/DB/本地命令；无跨步漂移检测</td>
+</tr>
+<tr>
+<td>重跑真实调用</td>
+<td>全部</td>
+<td>最真实</td>
+<td>每次都花钱、每次都产生副作用</td>
+</tr>
+<tr>
+<td>静态 fixture JSON</td>
+<td>数据</td>
+<td>稳定</td>
+<td>与真实会话的顺序和参数脱钩，抓不到漂移</td>
+</tr>
+</tbody>
+</table>
+<p>结论：<strong>磁带的价值在"顺序 + 参数指纹 + 副作用分层"这三件事上</strong>，而不是"缓存返回值"。</p>
+<hr />
+<h2>九、七个反模式</h2>
+<ol>
+<li><strong>用序号当查找键。</strong> 插一步全线错位，你唯一学到的信息是"测试挂了"。</li>
+<li><strong>漂移自动补录。</strong> 把回归信号静默掉，等于没测。</li>
+<li><strong>回放模式不短路副作用。</strong> "离线回放"里下单成功，是最贵的一种调试事故。</li>
+<li><strong>录制明文密钥。</strong> <code>args</code> 里带着 <code>token</code>/<code>api_key</code> 被提交进 git，是磁带最常见的真实事故。</li>
+<li><strong>磁带当验收测试。</strong> 回放全绿 ≠ 线上能跑，它只证明"和上次一样"。</li>
+<li><strong>同一磁带混多个环境。</strong> 生产参数和开发参数混在一个文件里，漂移永远报不明白。</li>
+<li><strong>录了不删。</strong> 磁带是开发工件：每条记录都留着超长文本时，一次会话能录出几 MB，最后没人看，等于没录。</li>
+</ol>
+<hr />
+<h2>十、上线前 12 项检查清单</h2>
+<ol>
+<li><code>canon()</code> 覆盖 dict 键序、字符串首尾空白、None、浮点精度</li>
+<li>键序差异不会产生两个指纹（自测：同一参数两种字典顺序必须同键）</li>
+<li>类型漂移（<code>3</code> vs <code>"3"</code>、<code>True</code> vs <code>1</code>）保持可区分</li>
+<li><code>args</code> 落盘前过脱敏白名单（token/password/api_key/authorization/cookie/secret）</li>
+<li>每个有副作用的工具在注册时显式标 <code>side_effect=True</code></li>
+<li>回放模式断言 <code>live_tool_calls == 0</code> 且 <code>real_side_effects == 0</code></li>
+<li>回放结果与录制结果做全量比对（不是"没抛异常就算过"）</li>
+<li>严格模式默认开启，只在开发期显式切 <code>replay+record</code></li>
+<li>漂移事件进 CI 断言（<code>drift_events == 0</code>），而不是只打日志</li>
+<li>磁带目录进 <code>.gitignore</code> 或单独的 <code>tapes/</code> 目录，并配 <code>.gitattributes</code> 标注为二进制/不参与 diff 统计</li>
+<li>时效性工具（行情、余额）不录，或在录制时写入过期时间并在回放时告警</li>
+<li>发布前跑一次全真链路，并记录与磁带的差异</li>
+</ol>
+<hr />
+<h2>十一、把磁带接进 CI（约 10 行）</h2>
+<pre><code class="language-python">def test_agent_flow_offline():
+    tape = Tape(&quot;tapes/order_flow.jsonl&quot;, mode=&quot;replay&quot;)   # 严格模式
+    result = run_order_agent(tape)
+
+    assert result == json.loads(open(&quot;tapes/order_flow.expected.json&quot;, encoding=&quot;utf-8&quot;).read())
+    assert tape.stats()[&quot;live_tool_calls&quot;] == 0,        &quot;回放时不该有真实调用&quot;
+    assert tape.stats()[&quot;real_side_effects&quot;] == 0,      &quot;回放时不该有副作用&quot;
+    assert tape.stats()[&quot;drift_events&quot;] == 0,           &quot;参数漂移必须失败&quot;
+</code></pre>
+<p>关键在最后三条断言：<strong>它们断言的是"没有发生的事"</strong>。绝大多数 flaky 测试之所以没用，就是因为只断言了返回值，而没有断言"这次运行没有偷偷干了别的"。</p>
+<hr />
+<h2>十二、代码</h2>
+<p>完整可跑（纯标准库，无第三方依赖）在仓库 <code>tools/tape/</code> 下：</p>
+<ul>
+<li><code>tape.py</code>（142 行）——<code>canon</code> / <code>call_key</code> / <code>redact</code> / <code>Tape.call</code> / <code>override</code> / <code>stats</code></li>
+<li><code>demo.py</code>（108 行）——本文五轮演示</li>
+<li><code>canon_check.py</code>——第四节五个规范化用例</li>
+</ul>
+<pre><code class="language-bash">python tools/tape/demo.py          # 五轮演示全流程
+python tools/tape/canon_check.py   # 规范化用例对照
+</code></pre>
+<hr />
+<p><strong>相关阅读</strong>：<a href="agent-long-task-resume-guide.html">AI Agent长任务实战指南：断点续跑、幂等与进度对账</a>（账本与恢复入口）·<a href="agent-reliability-guide.html">AI Agent自动化可靠性实战指南</a>（假成功的四形态）·<a href="agent-evaluation-observability-guide.html">AI Agent评测与可观测性实战指南</a>（怎么知道 Agent 真的在干活）。</p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
