@@ -1,0 +1,2 @@
+{"run_id": "u1", "job": "site-live-check", "at": "2026-10-02T12:00:00+08:00", "self_report": "ok", "read_side": 1, "evidence": [{"kind": "url", "ref": "https://felixwang007.github.io/awesome-content-tools/articles/agent-record-replay-tape-guide.html"}]}
+{"run_id": "u2", "job": "site-live-check", "at": "2026-10-02T12:00:00+08:00", "self_report": "ok", "read_side": 1, "evidence": [{"kind": "url", "ref": "https://felixwang007.github.io/awesome-content-tools/articles/nonexistent-xyz-2026.html"}]}

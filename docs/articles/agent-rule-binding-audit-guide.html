@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent规则绑定实战指南：为什么「自报成功」会掩盖零产出（附绑定审计工具）</title>
+    <meta name="description" content="2026年AI Agent验收工程实战（全部数字为本机实跑输出）：读侧计数器vs写侧计数器（规则被读到12次、产物0件=在场≠绑定）、三档证据分级（SELF自报/PROC过程/ARTF产物·为什么exit 0不算证据·零输入返回非成功状态）、四象限判定（BOUND/UNBOUND_GREEN绿灯无产物/MIRAGE状态失真/HONEST_FAIL）、可跑工具tools/bind/bind_audit.py（账本六字段·file/ledger/url三类证据核验·0字节文件不算产物·未核验URL记DECLARED不参与绑定率·退出码即门禁）、样例账本23条记录6种故障形态真实输出（绑定率0.25·静默12.2天·门禁退出码2）、对真实26个定时任务的脱敏扫描（启用17/26·产物证据0·过程证据8·仅自报18·绿灯残留在未启用任务上7个最长59.3天）、URL证据真请求核验（200→VERIFIED/404→BROKEN）与「不带UA时不存在页面也返回200空壳」的审计陷阱、19项selftest断言、五个反模式、12项落地清单、边界声明。">
+    <meta name="keywords" content="AI Agent验收,规则绑定,binding,自报成功,假绿灯,false green,last_status,静默失败,零产出,外部产物,判据外置,验收外置,证据分级,exit code不算证据,缺勤检测,账本对账,JSONL账本,URL核验,User-Agent空壳,门禁设计,selftest,Agent工程,自动化可靠性,cron监控">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-rule-binding-audit-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI Agent规则绑定实战指南：为什么「自报成功」会掩盖零产出</h1>
+<blockquote>
+<p>你的自动化任务已经连续 16 天什么都没做出来，但它的状态一直是绿的。</p>
+<p>这不是玄学，是<strong>验收位置</strong>问题：规则写在提示词里（读侧），产物长在外部世界（写侧），两个计数器各自涨各自的，中间没有对账。本文讲怎么把这个缺口补上：<strong>读侧计数 vs 写侧计数、三档证据、四象限判定</strong>，并附一个可跑的工具 <code>tools/bind/bind_audit.py</code>。</p>
+<p>文中所有输出块都是本机实跑结果（2026-10-02），包括对真实定时任务清单的脱敏扫描、真实 URL 核验和 19 项自检。</p>
+</blockquote>
+<hr />
+<h2>一、先说结论</h2>
+<ol>
+<li><strong>「任务成功」有三个完全不同的含义，混在一起用就是事故。</strong> 自报成功（<code>last_status=ok</code> / <code>exit 0</code> / 文本说"已完成"）、有进程跑过（脚本真的执行了）、外部留下了可核验的产物（文件 / URL / 账本条目）——只有第三档能支撑"做成了"。前两档在失败时不会报警，因为<strong>信号源和执行者是同一方</strong>。</li>
+<li><strong>规则出现在上下文里，不等于规则被执行。</strong> 读侧计数器（规则被提到几次）和写侧计数器（外部产物几件）如果没有绑定，会出现 12:0 这样的分布：规则读了 12 遍，产物 0 件，而每一次都自报成功。</li>
+<li><strong>验收必须挪到执行者写权限之外。</strong> 不要问"任务说它成功了吗"，要问"外部世界能不能查到它做过的痕迹"。判别式只有一条：<strong>失效时谁先发现</strong>。执行者先发现 = 没绑定。</li>
+</ol>
+<hr />
+<h2>二、两种计数器：在场的量和绑定的量</h2>
+<p>一个 Agent 系统里，关于同一条规则会有两个独立的量：</p>
+<table>
+<thead>
+<tr>
+<th>计数器</th>
+<th>观测位置</th>
+<th>增长条件</th>
+<th>成本</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>读侧</strong></td>
+<td>提示词 / 上下文 / 日志文本</td>
+<td>规则被写进 prompt、被引用、被复述</td>
+<td>~0</td>
+<td>任务 prompt 里有「发布后必须回读列表确认」</td>
+</tr>
+<tr>
+<td><strong>写侧</strong></td>
+<td>执行者写权限之外的产物</td>
+<td>外部世界多了一条可核验的痕迹</td>
+<td>高</td>
+<td>文章列表里真的多了一条记录、磁盘上真的多了一个非空文件</td>
+</tr>
+</tbody>
+</table>
+<p>只加读侧（把规则写得更强、更长、更醒目）是最容易做的事，也是最没用的事：<strong>只要还有更便宜的完成路径，执行一定走那条</strong>。规则写得再狠，也不会让廉价错误路径物理上走不通。</p>
+<p>把这两个数摆在一起，就有了一个可测的形态：</p>
+<pre><code>读侧 12 次  /  写侧 0 件   → 在场，未绑定
+读侧 12 次  /  写侧 12 件  → 绑定
+</code></pre>
+<p>上面那组 12:0 就是本工具自检里的第 7 个用例（<code>job-presence-only</code>，12 次运行每次都读到了规则、每次都自报 ok、产物 0 件）。它对应的判定是 <code>PRESENCE_ONLY</code>，门禁退出码 2。</p>
+<p><strong>为什么"在场"会产生安全感？</strong> 因为读侧计数器是自证的：日志里写满了"已检查""已确认""规则要求…"，看起来像在遵守。但这些字串是执行者自己产生的，不构成任何外部见证。</p>
+<hr />
+<h2>三、三档证据：自报、过程、产物</h2>
+<table>
+<thead>
+<tr>
+<th>档位</th>
+<th>证据</th>
+<th>能证明什么</th>
+<th>不能证明什么</th>
+<th>例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SELF</strong></td>
+<td>自报状态</td>
+<td>任务说自己跑完了</td>
+<td>任何外部事实</td>
+<td><code>last_status=ok</code>、<code>exit 0</code>、回复里的"已完成"</td>
+</tr>
+<tr>
+<td><strong>PROC</strong></td>
+<td>过程证据</td>
+<td>有真进程跑过、有 stdout</td>
+<td>有没有留下预期产物</td>
+<td>脚本执行完毕、产生日志行</td>
+</tr>
+<tr>
+<td><strong>ARTF</strong></td>
+<td>产物证据</td>
+<td>外部世界留下了可核验的痕迹</td>
+<td>痕迹是否"正确"（那是另一层）</td>
+<td>非空文件、HTTP 200 页面、账本条目</td>
+</tr>
+</tbody>
+</table>
+<p><strong>为什么 <code>exit 0</code> 不算证据？</strong> 因为退出码是程序自己给的，而"零输入"和"输入干净"在退出码上长得一模一样。一个真实的例子：某代码审查工具被传了一个不存在的目录，它扫描了 0 个文件，输出了「健康分 100/100 — ✅ 可以合并」，然后 <code>exit 0</code>。门禁只要断言"做过的活"（<code>files_scanned &gt; 0</code>），这类假绿灯就无处藏身。通则：<strong>零输入必须返回独立的非成功状态——「没输入」≠「输入干净」。</strong></p>
+<p>同样地，<strong>只声明不核验的产物等于没有产物</strong>。账本里写了一条 URL，和这个 URL 真的返回 200，是两件事。工具里把这两种情况分开记：未核验的记 <code>DECLARED</code>，核验通过的记 <code>VERIFIED</code>，只有 <code>VERIFIED</code> 参与绑定率。</p>
+<hr />
+<h2>四、四象限判定</h2>
+<p>把自报（SELF）和产物核验（ARTF）交叉，得到四种状态：</p>
+<table>
+<thead>
+<tr>
+<th>自报</th>
+<th>产物核验</th>
+<th>判定</th>
+<th>含义</th>
+<th>成本</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ok</td>
+<td>通过</td>
+<td><strong>BOUND</strong></td>
+<td>规则被绑定，可以信</td>
+<td>—</td>
+</tr>
+<tr>
+<td>ok</td>
+<td>无</td>
+<td><strong>UNBOUND_GREEN</strong></td>
+<td>绿灯无产物：最贵的一种失败，因为没人会去看</td>
+<td>极高（潜伏期长）</td>
+</tr>
+<tr>
+<td>fail</td>
+<td>有</td>
+<td><strong>MIRAGE</strong></td>
+<td>状态字段失真（反方向）：产物在，自报说失败</td>
+<td>中（会重复劳动）</td>
+</tr>
+<tr>
+<td>fail</td>
+<td>无</td>
+<td><strong>HONEST_FAIL</strong></td>
+<td>诚实的失败，报警会响，成本最低</td>
+<td>低</td>
+</tr>
+</tbody>
+</table>
+<p><strong>UNBOUND_GREEN 为什么最贵？</strong> 因为它的信号是错的：看板全绿，没人去查产物，等到有人发现"怎么一个月没动静"的时候，已经烧掉了一个月的额度和时间窗口。真实形态：一个任务自报 <code>ok</code>，而它对应的产物账本最后一条停在 13 天前——这 13 天里没有任何告警。</p>
+<p><strong>MIRAGE 也不罕见</strong>：任务实际把东西产出成功了，但因为最后一步校验脚本读错了字段，自报失败，于是被重跑，产出第二份。这类故障的方向是可喜的（产物在），但同样说明状态字段不能信。</p>
+<hr />
+<h2>五、工具：<code>tools/bind/bind_audit.py</code></h2>
+<p>单文件、零依赖（只用标准库），三个子命令：</p>
+<pre><code class="language-bash">python bind_audit.py selftest                          # 19 项断言，退出码即结论
+python bind_audit.py audit runs.jsonl [--check-urls]   # 对账一份运行账本
+python bind_audit.py scan-jobs jobs.json               # 扫描定时任务清单，输出证据档位分布
+python bind_audit.py explain                           # 判定表 + 账本字段说明
+</code></pre>
+<p>账本是一行一条 run 的 JSONL，字段就六个：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>含义</th>
+<th>少了它会怎样</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_id</code></td>
+<td>本次运行标识</td>
+<td>对账时无法指名道姓</td>
+</tr>
+<tr>
+<td><code>job</code></td>
+<td>任务名</td>
+<td>无法按任务聚合绑定率</td>
+</tr>
+<tr>
+<td><code>at</code></td>
+<td>运行时间（ISO8601）</td>
+<td>算不出"静默多少天"</td>
+</tr>
+<tr>
+<td><code>self_report</code></td>
+<td>自报结果</td>
+<td>无法区分 UNBOUND_GREEN 和 HONEST_FAIL</td>
+</tr>
+<tr>
+<td><code>read_side</code></td>
+<td>本次运行中规则被读到的次数</td>
+<td>无法区分"在场"和"什么都没发生"</td>
+</tr>
+<tr>
+<td><code>evidence</code></td>
+<td>声明的产物证据数组</td>
+<td>没有外部参照物，审计退化回读日志</td>
+</tr>
+</tbody>
+</table>
+<p>证据条目形如 <code>{"kind": "file|url|ledger", "ref": "...", "match": "..."}</code>：</p>
+<ul>
+<li><code>file</code>：本地路径，核验 = 存在且字节数 &gt; 0（<strong>0 字节不算产物</strong>）</li>
+<li><code>ledger</code>：本地账本 + 可选 <code>match</code> 子串，核验 = 文件存在且命中该子串</li>
+<li><code>url</code>：默认只记 <code>DECLARED</code>（离线审计不联网）；加 <code>--check-urls</code> 才真的发请求</li>
+</ul>
+<p><strong>退出码就是门禁结论</strong>：<code>0</code> 全部绑定、<code>2</code> 发现绿灯无产物、<code>3</code> 纯在场、<code>1</code> 用法或输入错误（账本为空也算 1——<strong>没输入不是干净，是没输入</strong>）。</p>
+<hr />
+<h2>六、实跑一：对账一份样例账本</h2>
+<p><code>python demo.py</code> 会生成一份覆盖六种故障形态的样例账本（23 条记录 / 6 个任务），下面是本机真实输出：</p>
+<pre><code class="language-text">审计时间: 2026-10-02T12:00:00+08:00
+记录数: 23  任务数: 6
+
+run_id        job                   自报         读     证据V/D/B  判定
+----------------------------------------------------------------------------------
+pv-01         job-publish-verify    ok         1       1/0/0  BOUND
+pv-02         job-publish-verify    ok         1       0/0/0  UNBOUND_GREEN
+pv-03         job-publish-verify    ok         1       0/0/0  UNBOUND_GREEN
+pv-04         job-publish-verify    ok         1       0/0/0  UNBOUND_GREEN
+af-01         job-artifact-file     ok         1       2/0/0  BOUND
+af-02         job-artifact-file     ok         1       2/0/0  BOUND
+af-03         job-artifact-file     ok         1       2/0/0  BOUND
+ud-01         job-url-declared      ok         1       0/1/0  UNBOUND_GREEN
+ud-02         job-url-declared      ok         1       0/1/0  UNBOUND_GREEN
+mr-01         job-mirage            failed     1       1/0/0  MIRAGE
+po-01 … po-12 job-presence-only     ok         1       0/0/0  UNBOUND_GREEN   (×12 行，此处折叠)
+hf-01         job-honest-fail       failed     1       0/0/0  HONEST_FAIL
+
+job                    runs  BOUND      绿灯无产物    读侧    写侧     绑定率     静默天数  状态
+----------------------------------------------------------------------------------------------------
+job-honest-fail           1      0          0     1     0     0.0        -  HONEST_FAIL
+job-mirage                1      0          0     1     1     0.0      7.0  MIRAGE
+job-presence-only        12      0         12    12     0     0.0        -  PRESENCE_ONLY
+job-url-declared          2      0          2     2     0     0.0        -  PRESENCE_ONLY
+job-publish-verify        4      1          3     4     1    0.25     12.2  PARTIAL
+job-artifact-file         3      3          0     3     6     1.0      3.1  BOUND
+
+门禁判定: UNBOUND FOUND（退出码 2）
+</code></pre>
+<p>三个可以直接读出来的信号：</p>
+<ol>
+<li><strong><code>job-publish-verify</code> 的绑定率是 0.25，静默 12.2 天。</strong> 4 次运行里 3 次是绿灯无产物——这正是最危险的形态：它曾经成功过一次（所以你会相信它还能成功），之后连续 3 次什么都没产出而状态全绿。</li>
+<li><strong><code>job-url-declared</code> 的"证据"全是声明（V/D/B = 0/1/0）。</strong> 账本里有 URL，但离线审计不联网，所以它按未绑定处理。这不是保守，是<strong>准确</strong>：声明不是产物。</li>
+<li><strong><code>job-presence-only</code> 12 次运行、12 次读侧、0 件产物。</strong> 读侧计数器一直在涨，写侧计数器一直是 0，而每一次都自报成功。</li>
+</ol>
+<p><code>job-artifact-file</code> 那行是反面对照：3 次运行、6 件核验过的证据（一个非空文件 + 一条账本命中），绑定率 1.0，静默天数 3.1。它和 <code>job-publish-verify</code> 的区别不在 prompt 写得好不好，只在于<strong>产物长在外部</strong>。</p>
+<hr />
+<h2>七、实跑二：扫描真实的定时任务清单（脱敏）</h2>
+<p><code>scan-jobs</code> 直接读 Hermes 风格的 <code>jobs.json</code>（<code>jobs[].name/state/enabled/last_status/last_run_at/no_agent/script/monitor_*</code>），按任务<strong>声明本身</strong>推断它的成功证据属于哪一档：</p>
+<table>
+<thead>
+<tr>
+<th>声明特征</th>
+<th>档位</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>有 <code>monitor_script</code> / <code>monitor_url</code></td>
+<td>ARTIFACT</td>
+<td>有人从外部看它</td>
+</tr>
+<tr>
+<td><code>no_agent</code> + <code>script</code></td>
+<td>PROCESS</td>
+<td>真进程 + 退出码，只证明跑了</td>
+</tr>
+<tr>
+<td>纯 prompt</td>
+<td>SELF</td>
+<td>成功与否只有它自己说</td>
+</tr>
+</tbody>
+</table>
+<p>名称不打印（只输出 <code>job#01…job#26</code> 和类别，坐标不可回指到具体任务）。本机真实输出（2026-10-02）：</p>
+<pre><code class="language-text">扫描时间: 2026-10-02T15:00:00+08:00
+任务总数: 26
+
+槽位      类别        启用    状态          自报      证据档                  停摆天数
+------------------------------------------------------------------------------
+job#01  发布        否     paused      ok      SELF                 16.3
+job#02  发布        否     paused      ok      SELF                 16.1
+job#03  发布        否     paused      ok      SELF                 14.8
+job#04  发布        是     scheduled   ok      SELF                  0.7
+job#05  其他        是     scheduled   ok      PROCESS               1.0
+job#06  心跳        是     scheduled   ok      PROCESS               0.0
+job#07  学习        是     scheduled   ok      PROCESS               0.7
+job#08  其他        是     scheduled   ok      PROCESS               0.1
+job#09  其他        是     scheduled   ok      PROCESS               0.0
+job#10  巡检        是     scheduled   ok      PROCESS               0.1
+job#11  巡检        是     scheduled   ok      PROCESS               0.1
+job#12  巡检        是     scheduled   ok      SELF                  0.3
+job#13  其他        是     scheduled   ok      PROCESS               1.0
+job#14  学习        是     scheduled   ok      SELF                  0.2
+job#15  其他        是     scheduled   ok      SELF                  0.2
+job#16  其他        是     scheduled   ok      SELF                  0.2
+job#17  其他        是     scheduled   ok      SELF                  2.0
+job#18  其他        否     paused      ok      SELF                 59.3
+job#19  其他        否     paused      error   SELF                 59.2
+job#20  其他        否     paused      ok      SELF                 59.1
+job#21  其他        否     paused      ok      SELF                 59.0
+job#22  其他        否     paused      ok      SELF                 58.9
+job#23  其他        否     paused      error   SELF                 58.8
+job#24  发布        是     scheduled   ok      SELF                  1.1
+job#25  其他        是     scheduled   ok      SELF                  0.2
+job#26  发布        是     scheduled   ok      SELF                  0.2
+
+启用 17/26 | 产物证据 0 | 过程证据 8 | 仅自报 18
+绿灯残留在未启用任务上: 7 个，最长 59.3 天
+绑定率(产物证据/总任务): 0.0
+
+判定: 仅自报的任务在失败时不会报警——它们的信号源与执行者是同一方。
+</code></pre>
+<p>几个读法：</p>
+<ul>
+<li><strong>产物证据 0 个。</strong> 26 个任务里没有一个声明了外部监视器。这意味着"任务健康"这件事在我这台机器上完全靠自报。</li>
+<li><strong>绿灯残留在未启用任务上：7 个，最长 59.3 天。</strong> 任务已经停摆将近两个月，<code>last_status</code> 还停在 <code>ok</code>。看板上它仍然"正常"。这是 UNBOUND_GREEN 的另一种变体：<strong>绿灯没有过期时间</strong>。</li>
+<li><strong>仅自报 18 个 / 过程证据 8 个。</strong> 过程证据那 8 个是 <code>no_agent</code> + 脚本类任务，它们至少证明"有真进程跑过"，但脚本自己的 <code>exit 0</code> 依然不能证明产物到位。</li>
+<li><code>job#19</code> 和 <code>job#23</code> 的 <code>last_status=error</code>——这是<strong>好事</strong>：诚实的失败会报警，成本最低。</li>
+</ul>
+<p>这份扫描不解释"任务该不该跑"，只回答一个问题：<strong>如果它今天失败了，谁会发现？</strong> 答案是 18 个任务里没人会发现。</p>
+<hr />
+<h2>八、实跑三：URL 证据核验（<code>--check-urls</code>）</h2>
+<p>URL 类产物必须真的请求一次，因为<strong>没发布的地址和已发布的地址在某些平台上长得一样</strong>。</p>
+<p>先看两个真实地址的核验结果（一个是本站已上线文章，一个是不存在的页面）：</p>
+<pre><code class="language-text">run_id        job                   自报         读     证据V/D/B  判定
+----------------------------------------------------------------------------------
+u1            site-live-check       ok         1       1/0/0  BOUND
+u2            site-live-check       ok         1       0/0/1  UNBOUND_GREEN
+
+job                    runs  BOUND      绿灯无产物    读侧    写侧     绑定率     静默天数  状态
+----------------------------------------------------------------------------------------------------
+site-live-check           2      1          1     2     1     0.5      0.1  PARTIAL
+
+门禁判定: UNBOUND FOUND（退出码 2）
+</code></pre>
+<p>核验细节：存在的页面返回 <code>HTTP 200</code> → <code>VERIFIED</code>；不存在的页面返回 <code>HTTP 404</code> → <code>BROKEN</code>。</p>
+<p><strong>还有一个更阴的坑：不带 User-Agent 的请求可能对"不存在的页面"也返回 200 空壳。</strong> 我在自己的内容发布流程里实测到过这种平台：所有文章地址（包括一个从未真正发布的伪造 ID）在不带浏览器 UA 的情况下<strong>一致返回 HTTP 200 + 39 字节空壳</strong>，带真实 Chrome UA 后才区分出 301（已发布）和 404（幽灵地址）。如果核验脚本用默认 UA，它会把"假发布"审计成"已发布"——<strong>审计工具本身变成了假绿灯的生产者</strong>。</p>
+<p>所以 <code>bind_audit.py</code> 的内置 URL 探针强制带浏览器 UA，并且把响应体长度一起记进结论（<code>HTTP 200, N+ bytes</code>），让你能看出"200 但 0 字节"这种空壳。</p>
+<hr />
+<h2>九、自检输出（19 项断言）</h2>
+<p>工具自带 <code>selftest</code>，用固定样例断言判定契约，退出码即结论：</p>
+<pre><code class="language-text">bind_audit selftest
+PASS  产物存在且非空 → BOUND
+PASS    核验计数=1
+PASS  0 字节文件 → UNBOUND_GREEN
+PASS    BROKEN 计数=1
+PASS  产物不存在 → UNBOUND_GREEN
+PASS  URL 未核验 → DECLARED 不算绑定
+PASS  账本命中 → BOUND
+PASS  账本未命中 → UNBOUND_GREEN
+PASS  自报失败但产物在 → MIRAGE
+PASS  12 次读 / 0 件产物 → PRESENCE_ONLY
+PASS    读侧计数=12
+PASS    写侧计数=0
+PASS    静默天数=None（从未有过产物）
+PASS  门禁退出码=2
+PASS  1 绑定 1 绿灯 → PARTIAL + 0.5
+PASS  缺字段 → HONEST_FAIL
+PASS  no_agent+script → PROCESS
+PASS  monitor_url → ARTIFACT
+PASS  纯 prompt → SELF
+------------------------------------------------------------------------
+19/19 通过
+</code></pre>
+<p>注意倒数第 5 条：<strong>缺字段（既没自报也没证据）判为 <code>HONEST_FAIL</code> 而不是成功</strong>。审计工具的默认值必须偏保守——"没数据"永远不能被读成"没问题"。</p>
+<hr />
+<h2>十、五个反模式</h2>
+<ol>
+<li><strong>用状态字段当验收。</strong> <code>last_status=ok</code> 是被告的证词，不是证据。至少要在旁边放一列"外部产物时间戳"。</li>
+<li><strong>绿灯没有过期时间。</strong> 停摆两个月的任务仍然显示 ok。凡是状态字段，都要配一个"距上次产物多久"的独立读数，并对它设阈值。</li>
+<li><strong>把 URL 当产物却从不请求。</strong> 声明 ≠ 核验。离线审计就该记 <code>DECLARED</code> 并拒绝计入绑定率，而不是含糊地算过。</li>
+<li><strong>只盯着自报失败去告警。</strong> 真正的损失都在自报成功的那一侧。告警要盯的是"窗口内该有的产物不存在"（缺勤检测），不是"任务报错了"。</li>
+<li><strong>让审计工具自己成为假绿灯源。</strong> 用默认 UA 请求、把 0 字节文件算成产物、把空账本算成通过——这三条都能让审计变成新的心理安慰。</li>
+</ol>
+<hr />
+<h2>十一、落地清单（12 项）</h2>
+<ul>
+<li>[ ] 每个任务产出的<strong>外部落点</strong>写下来（文件 / URL / 账本文件），落点必须在执行者写权限之外</li>
+<li>[ ] 每次运行写一条账本记录：<code>run_id / job / at / self_report / read_side / evidence[]</code></li>
+<li>[ ] 产物核验规则明确：文件非空、账本命中断言、URL 真请求</li>
+<li>[ ] URL 核验强制带浏览器 UA，并记录响应体长度</li>
+<li>[ ] 绑定率进入看板，而不只是状态字段</li>
+<li>[ ] 对"距上次产物天数"设阈值告警（缺勤检测），它比错误告警更早发现事故</li>
+<li>[ ] 未启用/暂停的任务上的状态字段标记为过期（或者干脆不展示）</li>
+<li>[ ] 零输入返回独立非成功状态，门禁断言"做过的活"而不是只看退出码</li>
+<li>[ ] 写操作配幂等键，避免 MIRAGE 触发重复产出</li>
+<li>[ ] 审计退出码接进 CI / cron，非 0 就阻断（否则审计只是报告）</li>
+<li>[ ] 定期抽样人工核对一条 <code>BOUND</code> 记录，确认核验规则本身没被绕过</li>
+<li>[ ] 每季度复审一次证据档位分布，把新增任务从 SELF 往 ARTIFACT 挪</li>
+</ul>
+<hr />
+<h2>十二、边界声明（这个工具不做什么）</h2>
+<ul>
+<li>它<strong>不判断产物是否正确</strong>，只判断产物是否可核验地存在。"发布了一个错误的内容"在它眼里仍是 BOUND。业务正确性是另一层。</li>
+<li>它<strong>不联网核验 URL</strong>，除非显式 <code>--check-urls</code>；默认把所有 URL 记为 <code>DECLARED</code> 并拒绝计入绑定。</li>
+<li>它能被绕过：只要伪造一个非空文件放在核验路径上，就有了一条"产物"。所以核验路径必须落在被审计者写权限之外——<strong>这是使用前提，不是工具能保证的属性</strong>。</li>
+<li>它<strong>不给 read_side 定权重</strong>。读侧计数只在区分 <code>PRESENCE_ONLY</code> 和 <code>NO_EVIDENCE</code> 时有用，数值大小没有意义——读 100 遍不产生任何绑定。</li>
+<li>它不做长期存储：账本和产物落点由你的流水线负责，它只做对账。</li>
+</ul>
+<hr />
+<h2>十三、怎么跑起来</h2>
+<pre><code class="language-bash">git clone https://github.com/Felixwang007/awesome-content-tools
+cd awesome-content-tools/tools/bind
+
+# 1) 先看判定契约
+python bind_audit.py selftest
+
+# 2) 生成样例账本并出审计报告（可复现）
+python demo.py
+
+# 3) 扫描自己的定时任务清单（Hermes 风格 jobs.json）
+python bind_audit.py scan-jobs /path/to/jobs.json
+
+# 4) 对账自己的运行账本；要真核验 URL 加 --check-urls
+python bind_audit.py audit runs.jsonl --check-urls
+</code></pre>
+<p>接入顺序建议：<strong>先让每个任务写一条账本记录</strong>（哪怕 evidence 一开始是空的），跑一周，看你的绑定率是多少。绝大多数自动化系统的第一份报告都长这样：读侧计数很漂亮，写侧计数接近 0。</p>
+<hr />
+<blockquote>
+<p>一句话总结：<strong>别问任务说它成功了吗，问外部世界能不能查到它做过的痕迹。</strong></p>
+<p>相关文章：<a href="agent-record-replay-tape-guide.html">工具调用磁带（record-replay）</a>（怎么把一次真实会话录下来离线重放，让行为漂移可见）、<a href="agent-long-task-resume-guide.html">长任务断点续跑与进度对账</a>（清单 / 账本 / 幂等键）、<a href="agent-cost-optimization-guide.html">AI Agent成本优化</a>（静默成功是最贵的一类浪费）。</p>
+</blockquote>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>

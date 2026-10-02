@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "agent-rule-binding-audit-guide": {
+        "title": "AI Agent规则绑定实战指南：为什么「自报成功」会掩盖零产出（附绑定审计工具）",
+        "description": "2026年AI Agent验收工程实战（全部数字为本机实跑输出）：读侧计数器vs写侧计数器（规则被读到12次、产物0件=在场≠绑定）、三档证据分级（SELF自报/PROC过程/ARTF产物·为什么exit 0不算证据·零输入返回非成功状态）、四象限判定（BOUND/UNBOUND_GREEN绿灯无产物/MIRAGE状态失真/HONEST_FAIL）、可跑工具tools/bind/bind_audit.py（账本六字段·file/ledger/url三类证据核验·0字节文件不算产物·未核验URL记DECLARED不参与绑定率·退出码即门禁）、样例账本23条记录6种故障形态真实输出（绑定率0.25·静默12.2天·门禁退出码2）、对真实26个定时任务的脱敏扫描（启用17/26·产物证据0·过程证据8·仅自报18·绿灯残留在未启用任务上7个最长59.3天）、URL证据真请求核验（200→VERIFIED/404→BROKEN）与「不带UA时不存在页面也返回200空壳」的审计陷阱、19项selftest断言、五个反模式、12项落地清单、边界声明。",
+        "keywords": "AI Agent验收,规则绑定,binding,自报成功,假绿灯,false green,last_status,静默失败,零产出,外部产物,判据外置,验收外置,证据分级,exit code不算证据,缺勤检测,账本对账,JSONL账本,URL核验,User-Agent空壳,门禁设计,selftest,Agent工程,自动化可靠性,cron监控",
+    },
     "agent-record-replay-tape-guide": {
         "title": "AI Agent调试成本控制实战：工具调用磁带（record-replay）与行为漂移检出",
         "description": "2026年AI Agent调试工程实战（全部数字为本机实跑输出）：工具调用磁带record-replay设计——append-only JSONL七字段（seq/tool/key/args/result/ms/side_effect）、缓存键=工具名+规范化参数哈希、三种事件区分（命中/漂移TapeDrift/落空TapeMiss）、严格模式与replay+record补录模式对比、副作用短路（回放实测live_tool_calls=0/real_side_effects=0）、五种规范化用例实测（dict键序·首尾空白·全角空格U+3000·数字vs字符串·布尔vs整数）、五轮演示真实输出（录制252.68ms→回放0.06ms）、注入式回放离线复现上游500降级分支、Windows文本模式CRLF导致工具自报70字节而磁盘72字节的真实字节差异、磁带边界声明（不做验收测试/会固化上游漂移）、与monkeypatch/HTTP层录制/fixture五种方案对比、七个反模式、上线前12项检查清单。",
