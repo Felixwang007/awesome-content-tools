@@ -1,0 +1,4 @@
+# selftest/demo scratch artifacts (regenerated on every run)
+_selftest_tmp/
+_demo/
+__pycache__/
