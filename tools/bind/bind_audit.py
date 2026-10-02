@@ -355,9 +355,9 @@ def selftest():
     # 样例 5：账本命中/未命中
     led = os.path.join(tmp, "ledger.jsonl")
     with open(led, "w", encoding="utf-8") as f:
-        f.write('{"gid": "7681570773751939584"}\n')
+        f.write('{"gid": "0000000000000000099"}\n')
     d = judge_record({"run_id": "r5", "job": "j-led", "self_report": "ok", "read_side": 1,
-                         "evidence": [{"kind": "ledger", "ref": led, "match": "7681570773751939584"}]})
+                         "evidence": [{"kind": "ledger", "ref": led, "match": "0000000000000000099"}]})
     check("账本命中 → BOUND", d["verdict"], "BOUND")
     d = judge_record({"run_id": "r6", "job": "j-led", "self_report": "ok", "read_side": 1,
                          "evidence": [{"kind": "ledger", "ref": led, "match": "9999999999999999999"}]})
