@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI味检测与去AI化改写实战指南：零依赖检测脚本 + 4份真实文本实测</title>
+    <meta name="description" content="2026年中文AI味检测与去AI化实战（全部分数为本机实跑原样输出）：零依赖检测脚本deai_lint.py（纯标准库·不调用模型·同一文本永远同一分数）、4个统计量（句长变异系数CV·段落长度离散度·具体数字密度·句首最高重复次数）+6类词表与句式库（空转连接词·升华口号·空洞形容·无源数据·元话语说教·直呼读者·破折号密度）与完整计分公式（扣分按次数封顶·加分项存在导致总分非单调）、4份真实文本实测（模型原生68分REWRITE·同模型加4条要求改写后90分·通讯社特稿100分·气象通报100分·含数字密度0.0→39.51/千字对比）、两条被样本否掉的规则全过程（列举≠排比：第一版2-8字顿号三连规则命中30次=该稿判0分；CV硬门槛：同一稿件三种取文方式CV漂0.038>人机差距0.018）、4条硬门槛不许互相补偿（为什么不能只卡总分）、10条改写对照表、边界声明（文字层≠行为层：同一账号后台展现3536/3540而阅读为0）、13项selftest断言、复现命令与取文代码、上线检查清单11项。">
+    <meta name="keywords" content="AI味检测,去AI味,AI写作痕迹,文本检测脚本,零依赖,deai_lint,词表检测,句长变异系数,变异系数CV,数字密度,列举与排比,评分卡设计,硬门槛,内容门禁,改写对照表,文字层与行为层,假成功,内容质检,自媒体写作,写作规范,selftest,统计量,中文写作工具">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/ai-flavor-detection-rewrite-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>AI味检测与去AI化改写实战指南：零依赖检测脚本 + 4份真实文本实测</h1>
+<blockquote>
+<p>"AI味"通常被当成玄学：说不清、只能凭感觉改。我把它拆成可以数的东西（句子长度起伏、具体数字密度、模板词命中），写了一个零依赖的检测脚本 <code>deai_lint.py</code>，然后拿 4 份真实文本（2 份模型输出、2 份职业媒体稿）去跑。<br />
+本轮（v0.4.0）实测：模型原生输出 <strong>68 分</strong>过不了门；同一模型按 4 条要求改写后 <strong>90 分</strong>；一份通讯社特稿和一份气象通报都是 <strong>100 分</strong>。比分数更值得看的，是两条规则被样本否掉的过程，以及一条判据在不同取文方式下会漂多少。<br />
+文中所有分数、指标、命令输出都是本机实测原样贴出，脚本和两份模型样本都在仓库里可以直接跑；另外两份是公开稿件，下文给了地址和取文方式。</p>
+</blockquote>
+<hr />
+<h2>一、先把"AI味"拆成三层，不然没法量化</h2>
+<p>把"像不像人写的"当成一件事，永远只能靠感觉。拆成三层之后，只有第一层是玄学：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>问的问题</th>
+<th>能不能测</th>
+<th>谁在乎</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>词表层</td>
+<td>有没有"首先/其次/最后""值得注意的是""让我们一起"这类模板词</td>
+<td><strong>能测</strong>，确定性</td>
+<td>读者（读三行就烦）</td>
+</tr>
+<tr>
+<td>节奏层</td>
+<td>句子长短有没有起伏、段落是不是一样长</td>
+<td><strong>能测</strong>，统计量</td>
+<td>读者（读起来"打点机"感）</td>
+</tr>
+<tr>
+<td>事实层</td>
+<td>通篇有没有可核对的东西：数字、时间、地点、名字、金额</td>
+<td><strong>能测</strong>，计数</td>
+<td>读者+平台（决定有没有人看下去）</td>
+</tr>
+</tbody>
+</table>
+<p>第三层最容易被忽略，但它决定了内容是否有人看。样本 S1（模型原生输出）实测 <strong>449 字</strong>、具体数字密度 <strong>0.0/千字</strong>——整篇没有一个可核对的事实。这种文本的问题不是"像 AI 写的"，而是<strong>读完什么都没剩下</strong>，换个真人来写同样没人看。</p>
+<blockquote>
+<p>结论前置：<strong>去AI味不是改文风，是补信息。</strong> 词表和节奏是"别让人一眼看出是模板"，事实密度才是"让人愿意读完"。</p>
+</blockquote>
+<hr />
+<h2>二、检测器怎么做：4 个统计量 + 6 类词表</h2>
+<p>脚本 <code>deai_lint.py</code>（零依赖、纯标准库、不调用任何模型，同一份文本永远得同一个分数）分两路读数：</p>
+<p><strong>统计量（不依赖词表，改词改不掉）</strong></p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>怎么算</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>句长变异系数 CV</td>
+<td>句长标准差 ÷ 句均长</td>
+<td>越低＝句子越整齐</td>
+</tr>
+<tr>
+<td>段落长度离散度</td>
+<td>段长标准差 ÷ 段均长</td>
+<td>越低＝每段一样长，像清单</td>
+</tr>
+<tr>
+<td>具体数字密度</td>
+<td>数字/时间/金额/量词计数 ÷ 千字</td>
+<td>事实层的读数</td>
+</tr>
+<tr>
+<td>句首最高重复次数</td>
+<td>相同前两字的句子数</td>
+<td>起手式重复</td>
+</tr>
+</tbody>
+</table>
+<p><strong>词表/句式命中（每条都带行号和改法）</strong></p>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>例子</th>
+<th>扣分权重</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>空转连接词</td>
+<td>首先、其次、最后、值得注意的是、综上所述、由此可见</td>
+<td>4</td>
+</tr>
+<tr>
+<td>升华口号</td>
+<td>让我们一起、未来可期、赋能、助力、深耕、打磨、闭环、抓手</td>
+<td>6</td>
+</tr>
+<tr>
+<td>空洞形容</td>
+<td>极大地、显著提升、意义重大、淋漓尽致</td>
+<td>5</td>
+</tr>
+<tr>
+<td>无源数据</td>
+<td>研究表明、数据显示、据统计、专家表示</td>
+<td>7</td>
+</tr>
+<tr>
+<td>元话语说教</td>
+<td>你有没有想过、相信很多人、我们不难发现</td>
+<td>5</td>
+</tr>
+<tr>
+<td>直呼读者</td>
+<td>你的存款、你的房子、你的生活</td>
+<td>3</td>
+</tr>
+<tr>
+<td>句式模板</td>
+<td>不是…而是…、既…又…还…、三段式递进、破折号密度</td>
+<td>3~5</td>
+</tr>
+</tbody>
+</table>
+<p>计分规则（就是代码里那几行，没有隐藏项）：</p>
+<pre><code>score = 100 − penalty，clamp 到 [0, 100]
+
+penalty = Σ(词表命中次数 × 权重)，每条的次数按 6 次封顶
+        + Σ(句式模板命中次数 × 权重)
+        + 句首重复（同一开头 ≥3 次）→ 4 × (重复次数 − 2)
+        + 破折号密度 &gt; 3/千字 → 3 × int(密度 ÷ 3)
+        + CV &lt; 0.30 → 10 分
+        + 段落长度离散度 &lt; 0.3 → 8 分
+        + 数字密度 &lt; 3/千字 → 10 分
+        − 加分：数字密度 ≥ 12/千字 → 8 分；CV ≥ 0.7 → 6 分
+</code></pre>
+<p>两点设计取舍值得先说明：<strong>扣分按次数封顶</strong>（同一句口头禅出现 20 次和 6 次扣一样多），避免长文被单一维度压死；<strong>加分项存在</strong>意味着"总分"不是扣分的单调函数——这一点在第三节和第五节都会咬人。</p>
+<hr />
+<h2>三、实测：4 份真实文本，一次跑完（v0.4.0）</h2>
+<p>样本来源（四份都是真实文本，不是我自己造的对照）：</p>
+<ul>
+<li><strong>S1</strong>：DeepSeek 对话模型单次输出，提示词"写一篇约 400 字的中文短文，主题是《如何提高工作效率》"，未做任何引导。仓库内 <code>tools/samples/A1_llm_baseline.txt</code>。</li>
+<li><strong>S2</strong>：同一个模型、同一份原文，加 4 条改写要求重新生成（要具体数字、删过渡词和结尾升华、句长要有起伏、不许无出处引用）。仓库内 <code>tools/samples/A2_llm_rewritten.txt</code>。</li>
+<li><strong>S3</strong>：中新社稿《从北京天坛到华盛顿月亮门花园，"天圆地方"的跨洋回响》（新浪转载页，取文方式见第九节）。</li>
+<li><strong>S4</strong>：中央气象台天气通报，经新浪财经转载（取文方式见第九节）。</li>
+</ul>
+<p>汇总（<code>deai_lint.py</code> v0.4.0，及格线 75，判定以四条硬门槛为准）：</p>
+<table>
+<thead>
+<tr>
+<th>样本</th>
+<th>类型</th>
+<th>分数</th>
+<th>判定</th>
+<th>字数</th>
+<th>句长CV</th>
+<th>数字密度</th>
+<th>短词列举</th>
+<th>词表/句式命中</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S1</td>
+<td>模型原生</td>
+<td><strong>68</strong></td>
+<td>REWRITE</td>
+<td>449</td>
+<td>0.422</td>
+<td>0.0/千字</td>
+<td>0.0/千字</td>
+<td>研究表明×1(-7)、首先/其次/最后×3(-12)、破折号 4.45/千字(-3)</td>
+</tr>
+<tr>
+<td>S2</td>
+<td>同模型改写</td>
+<td><strong>90</strong></td>
+<td>PASS</td>
+<td>329</td>
+<td>0.273</td>
+<td>39.51/千字</td>
+<td>0.0/千字</td>
+<td>无</td>
+</tr>
+<tr>
+<td>S3</td>
+<td>通讯社特稿</td>
+<td><strong>100</strong></td>
+<td>PASS</td>
+<td>977</td>
+<td>0.44</td>
+<td>9.21/千字</td>
+<td>0.0/千字</td>
+<td>无</td>
+</tr>
+<tr>
+<td>S4</td>
+<td>气象通报</td>
+<td><strong>100</strong></td>
+<td>PASS</td>
+<td>1866</td>
+<td>0.709</td>
+<td>34.83/千字</td>
+<td>8.57/千字</td>
+<td>句首重复×4(-8)、三项排比×1(-4)</td>
+</tr>
+</tbody>
+</table>
+<p>S1 的真实报告（原样输出）：</p>
+<pre><code>=== tools/samples/A1_llm_baseline.txt · AI味分数 68/100 · REWRITE（及格线 75，deai_lint v0.4.0）
+字数 449 · 句子 18 · 句均长 24.4 · 变异系数 0.422 · 数字密度 0.0/千字 · 短词列举 0.0/千字
+-- 硬门槛（不可互相补偿，任一不过即返工）--
+  FAIL 总分 ≥ 75（当前 68）
+  FAIL 具体数字密度 ≥ 3/千字（当前 0.0）
+  PASS 无「升华口号」命中
+  FAIL 无「无源数据」命中
+-- 统计量提示 --
+  · 句长变异系数 0.422 偏均匀（仅作参考读数，未扣分——实测专业记者稿也在 0.33 附近）
+  · 具体数字密度 0.0/千字 &lt; 3：通篇没有可核对的事实，是空泛的主要来源
+-- 词表/句式命中（按扣分排序）--
+  [无源数据] 「研究表明」×1（-7） 行5
+      → 补出处或改成你自己跑出来的数（本机实测/官方通报/文件名+页码）
+  [空转连接词] 「首先」×1（-4） 行3
+  [空转连接词] 「其次」×1（-4） 行5
+  [空转连接词] 「最后」×1（-4） 行9
+  [句式模板] 「破折号密度 4.45/千字」×4（-3） 行5
+</code></pre>
+<p>最有用的一条结论与模型能力无关：</p>
+<blockquote>
+<p><strong>同一模型，只改对它的要求：分数 68 → 90，数字密度 0.0 → 39.51/千字，模板词清零。</strong><br />
+模型不是不会具体，是<strong>默认输出会漂向模板</strong>；把"要具体"写成硬要求，它就能具体。</p>
+</blockquote>
+<p>S4 那一行还藏了个细节：它命中了两条句式模板（-12 分），最终仍然 100 分，因为 CV ≥ 0.7 加回 6 分、数字密度 ≥ 12/千字 加回 8 分。<strong>加分项能把扣分盖过去</strong>——这正是第五节坚持用硬门槛定生死的理由。</p>
+<p>顺手也把本文自己喂进去跑了一遍：判定 <strong>PASS</strong>，命中的只有「句首重复×6（-16）」和「三项排比×1（-4）」。总分却不稳：同一篇文本，这句话加上之前 94 分、加上之后 88 分、再润一次又是 94 分——句长变异系数就在 ≥0.7 那条加分线上下晃（同一稿三次实测 0.697 / 0.703 / 0.705），一句话就能让 6 分加分出现或消失。这就是第五节的活例：<strong>加分项既能盖住扣分，也会因为一句话就消失。</strong></p>
+<hr />
+<h2>四、两条被样本否掉的规则（都能复算）</h2>
+<p>规则库第一版里有两条判据，跑完这四份样本就被否了。两条的否证过程今天都能用仓库里的脚本和文本复算一遍。</p>
+<h3>规则 1：把"列举"当成"三连排比"</h3>
+<p>第一版的三项排比规则是 <code>各项 2~8 字的顿号三连</code>。它在 S4 这份气象通报上命中的是这种东西：</p>
+<pre><code>重庆、湖北、安徽、
+辽宁东南部、湖北西北部、重庆西南部和北部、
+河南东南部、安徽、江苏南部、
+</code></pre>
+<p>规则分不清<strong>排比</strong>和<strong>列举</strong>：排比是修辞（长词组、有节奏、可删），列举是信息（短词、必要、删了就没内容）。同一条正则套到 S4 上，命中 <strong>30 次</strong>。</p>
+<p>复算（今天的脚本 + 今天的样本，一条正则就能验证）：</p>
+<pre><code class="language-python">OLD = r&quot;[^，。；：、\n]{2,8}、[^，。；：、\n]{2,8}、[^，。；：、\n]{2,8}、&quot;    # 第一版
+NEW = r&quot;[^，。；：、\n]{5,14}、[^，。；：、\n]{5,14}、[^，。；：、\n]{5,14}、&quot;  # 现在
+# 同一段 S4 文本：OLD 命中 30 次，NEW 命中 1 次
+</code></pre>
+<p>在现在的计分公式下，30 次命中 = −120 分，S4 的账变成 <code>100 − (120 + 12 − 14) = max(0, −18) =</code> <strong>0 分</strong>。也就是说，只要沿用第一版的字长阈值，这份职业媒体稿会被判 0 分——"越规范的官方通报，分数越低"。</p>
+<p>修正三条：</p>
+<ol>
+<li>规则改成"长词组顿号三连"：每项最小长度提到 <strong>5 个字</strong>（排比才成立），短词列举不再扣分；</li>
+<li>短词列举单独统计成<strong>对照读数</strong>（不扣分），S4 的短词列举 8.57/千字 一眼可见——既能看见它，又不会拿它扣分；</li>
+<li>加回归断言：<code>重庆、湖北、安徽、江苏、浙江等地</code> 不触发排比扣分、且被计入对照读数（<code>selftest</code> 里的第 8、9 项）。</li>
+</ol>
+<blockquote>
+<p>教训：任何词表类检测器都会把"规范写法"当成"模板腔"。<strong>必须用正常人写的文本做负样本回归</strong>，否则它会逼着作者把正确写法改掉，那比不改还糟。</p>
+</blockquote>
+<h3>规则 2：把"句长整齐"当硬门槛</h3>
+<p>第一版门槛里有一条"句长变异系数 ≥ 0.45"。四份样本的实测 CV：</p>
+<table>
+<thead>
+<tr>
+<th>样本</th>
+<th>类型</th>
+<th>句长CV</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S1</td>
+<td>模型原生</td>
+<td>0.422</td>
+</tr>
+<tr>
+<td>S2</td>
+<td>模型改写</td>
+<td>0.273</td>
+</tr>
+<tr>
+<td>S3</td>
+<td>通讯社特稿</td>
+<td>0.44</td>
+</tr>
+<tr>
+<td>S4</td>
+<td>气象通报</td>
+<td>0.709</td>
+</tr>
+</tbody>
+</table>
+<p>模型稿落在 0.273~0.422，人写稿落在 0.44~0.709。看上去还能分开，但两段只差 <strong>0.018</strong>，而这条读数对<strong>取文方式</strong>比对"人机差异"更敏感。同一篇 S3，只改段落切分：</p>
+<table>
+<thead>
+<tr>
+<th>S3 的取法</th>
+<th>句长CV</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>网页抽出的 16 段（含标题行、图注行）</td>
+<td>0.44</td>
+</tr>
+<tr>
+<td>去掉标题与图注后的 13 段</td>
+<td>0.433</td>
+</tr>
+<tr>
+<td>段间全并成一段</td>
+<td>0.471</td>
+</tr>
+</tbody>
+</table>
+<p>同源文本因切分不同漂了 <strong>0.038</strong>，比"模型稿与人写稿"的差距（0.018）还大。<strong>CV 在 4 份样本上分不开人机，只够说明这条规则不能用。</strong></p>
+<p>修正：CV 从硬门槛降级为<strong>参考读数</strong>——低于 0.30 时警告并扣 10 分（句子长短几乎没有起伏确实是机器腔），0.30~0.45 只提示不扣分，≥ 0.7 反而加 6 分（长短句混排像人写的）。</p>
+<blockquote>
+<p>教训：<strong>4 份样本只够筛掉失效的规则，不够标定阈值。</strong> 阈值标定要上百份带标签样本，这是本工具的已知边界，也是所有"AI 检测器"宣称准确率时的同一个空档。</p>
+</blockquote>
+<hr />
+<h2>五、硬门槛为什么是 4 条，而不是 1 个总分</h2>
+<p>总分是加权和，加权和可以被单一维度刷：数字塞多点、词表一个不犯，总分就能堆上去（S4 是活例：命中两条句式模板，靠加分项回到 100 分）。所以最终判定不看总分，看 4 条<strong>彼此独立、不许互相补偿</strong>的门槛：</p>
+<pre><code>总分 ≥ 75
+具体数字密度 ≥ 3/千字
+无「升华口号」命中
+无「无源数据」命中
+</code></pre>
+<p>推而广之，任何"评分卡式"的内容门禁都该这么设计：<strong>总分用于知道该改哪儿，硬门槛用于决定能不能发。</strong> 多维度加权求和再卡一个线，等于告诉生产端"你可以用某一个维度换另一个维度"。</p>
+<hr />
+<h2>六、改写对照表（都来自实测命中）</h2>
+<table>
+<thead>
+<tr>
+<th>AI 腔</th>
+<th>改成</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>首先…其次…最后…</td>
+<td>删掉连接词，句子之间靠内容顺序衔接</td>
+</tr>
+<tr>
+<td>值得注意的是 / 综上所述</td>
+<td>直接写那件事；要收尾就用最后一句事实收</td>
+</tr>
+<tr>
+<td>研究表明 / 数据显示</td>
+<td>换成你自己跑出来的数（本机实测/官方通报/文件名+页码）</td>
+</tr>
+<tr>
+<td>让我们一起…未来可期！</td>
+<td>删掉。用一句具体的事、一个数字或一句原话结尾</td>
+</tr>
+<tr>
+<td>显著提升 / 极大地</td>
+<td>换成"从 X 到 Y"（时间、金额、人数、次数）</td>
+</tr>
+<tr>
+<td>赋能 / 助力 / 深耕 / 打磨 / 闭环</td>
+<td>换动词：做了什么、对谁、结果是什么</td>
+</tr>
+<tr>
+<td>破折号解释</td>
+<td>改句号或括号；每千字超过 3 个就该查</td>
+</tr>
+<tr>
+<td>三连排比（长词组）</td>
+<td>留一项，剩下两项换句式</td>
+</tr>
+<tr>
+<td>你有没有想过</td>
+<td>把结论放进场景或数据，让读者自己得出</td>
+</tr>
+<tr>
+<td>你的存款 / 你的房子</td>
+<td>用画面和数字让读者代入，别对读者喊话</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>七、必须说清的边界：文字层 ≠ 行为层</h2>
+<p>这是本工具最重要的一条边界，因为它关系到你会不会把"改了文风"错当成"会有流量"。</p>
+<p>同一个账号 2026-09-01 发布的两篇图文，后台读数：<strong>展现 3536 次 / 阅读 0</strong>、<strong>展现 3540 次 / 阅读 0</strong>，两篇都没有推荐标记（未进推荐池）。稍晚发布的另一篇：<strong>71 次展现 / 1 次阅读</strong>。发布侧每一步都是绿的——接口返回成功、有内容编号、内容在后台可见；平台侧的读数是零阅读、不给推荐。</p>
+<p>这说明两件事：</p>
+<ol>
+<li><strong>发布成功、文风改善、平台推荐是三件独立的事</strong>，各有自己的读数和判定方。</li>
+<li>2026 年主流平台的判定已经下沉到<strong>信息源与账号行为层</strong>（谁在什么环境下用什么方式发的、账号历史如何），不是逐句查你的形容词。把"AI味词表"改干净，能改善人的阅读体验，<strong>但不对流量做任何承诺</strong>。</li>
+</ol>
+<p>所以 <code>deai_lint.py</code> 的定位要写清楚：它是<strong>防止把模板垃圾发出去的返工门</strong>，不是流量预测器，更不是"AI 检测器绕过工具"。它也回答不了"这段文字是不是 AI 写的"——它只回答"这段文字里有多少可数的空转成分"。</p>
+<p>顺带一句给用检测器做审核的场景：任何"AI 生成检测"（包括我这个脚本）都只有统计意义上的区分力，误判必然存在（第四节的两条就是）。<strong>用检测器当门禁可以，用它当判决不可以。</strong></p>
+<hr />
+<h2>八、接进发布流水线</h2>
+<pre><code class="language-bash"># 单篇体检（退出码 0=过，1=返工，2=用法/文件错误）
+python deai_lint.py draft.md
+
+# 批量体检 + 机器可读（给流水线/看板用）
+python deai_lint.py --json draft.md outro.md
+
+# 自定义及格线
+python deai_lint.py --threshold 80 draft.md
+
+# 自检（自带样例 + 13 项断言，验证脚本本身没坏）
+python deai_lint.py selftest
+</code></pre>
+<p>接进流水线的三条纪律：</p>
+<ol>
+<li><strong>门禁只拦"明显空转"，不拦风格</strong>。阈值 75 是"有具体信息、没有模板词"的底线，不是"写得好"。设太高会逼着作者为了过检测硬塞数字。</li>
+<li><strong>退出码即结论，不要解析文字</strong>。<code>0/1/2</code> 三个状态足够 CI 用；报告文本留给人看行号和改法。</li>
+<li><strong>检测器的修改必须带回归样本</strong>。每次改词表或阈值，先把"应该通过的正常人写文本"跑一遍；第四节那两条规则问题都是这么发现的。</li>
+</ol>
+<p>三档处置建议：</p>
+<table>
+<thead>
+<tr>
+<th>分数</th>
+<th>处置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>≥ 90</td>
+<td>直接发</td>
+</tr>
+<tr>
+<td>75~89</td>
+<td>看命中的行号改 2~3 处再发（优先补数字、删模板词）</td>
+</tr>
+<tr>
+<td>&lt; 75</td>
+<td>退回去重写。别在原文上打补丁，模板骨架改不掉</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>九、复现</h2>
+<p>脚本与两份模型样本都在本仓库：</p>
+<pre><code class="language-bash"># 脚本（零依赖，Python 3.8+）
+tools/deai_lint.py
+
+# 两份可复现的模型样本（S1 原生输出 / S2 按 4 条要求改写）
+tools/samples/A1_llm_baseline.txt
+tools/samples/A2_llm_rewritten.txt
+
+python tools/deai_lint.py --threshold 75 tools/samples/A1_llm_baseline.txt tools/samples/A2_llm_rewritten.txt
+python tools/deai_lint.py selftest
+</code></pre>
+<p>S3、S4 是第三方媒体的公开稿件，未随仓库分发（版权），按下面的地址和方式自行取文即可复现：</p>
+<ul>
+<li>S3：中新社稿《从北京天坛到华盛顿月亮门花园，"天圆地方"的跨洋回响》，新浪转载页 <code>https://news.sina.com.cn/zx/gj/2026-09-23/doc-inisvumv5211565.shtml</code></li>
+<li>S4：中央气象台天气通报，新浪财经转载页 <code>https://finance.sina.com.cn/jjxw/2026-09-28/doc-initirzr3985011.shtml</code></li>
+</ul>
+<p>取文方式（正文段落怎么抽会影响统计量，所以把口径写清楚）：</p>
+<pre><code class="language-python">import re, html, urllib.request
+
+url = &quot;&lt;上面任意一个地址&gt;&quot;
+req = urllib.request.Request(url, headers={&quot;User-Agent&quot;: &quot;Mozilla/5.0&quot;})
+raw = urllib.request.urlopen(req, timeout=30).read().decode(&quot;utf-8&quot;, &quot;replace&quot;)
+
+body = re.search(r'id=&quot;artibody&quot;(.*?)&lt;/div&gt;', raw, re.S).group(1)   # 新浪正文容器
+paras = []
+for p in re.findall(r&quot;&lt;p[^&gt;]*&gt;(.*?)&lt;/p&gt;&quot;, body, re.S):
+    t = re.sub(r&quot;\s+&quot;, &quot; &quot;, html.unescape(re.sub(r&quot;&lt;[^&gt;]+&gt;&quot;, &quot;&quot;, p))).strip()
+    if len(t) &gt;= 15:
+        paras.append(t)
+
+open(&quot;sample.txt&quot;, &quot;w&quot;, encoding=&quot;utf-8&quot;).write(&quot;\n\n&quot;.join(paras))
+</code></pre>
+<p>引用这两份稿件的意义在于<strong>用"职业媒体稿"当负样本</strong>：检测器如果判记者稿返工，那多半是检测器的规则错了，不是记者写错了——第四节的两条修正就是这么来的。同时注意口径本身的不确定性：同一篇稿子，段落切法不同，CV 会漂 0.038（第四节那张表），所以任何"单条统计量阈值"都别信，除非它在上百份带标签样本上标定过。</p>
+<hr />
+<h2>十、上线检查清单</h2>
+<ul>
+<li>[ ] 检测器有 <code>selftest</code>，且断言里既有"AI 腔必须被抓"，也有"正常人写文本必须通过"</li>
+<li>[ ] 每一条规则都标注了"为什么"和"怎么改"，输出可执行到行号</li>
+<li>[ ] 硬门槛彼此独立，不允许维度之间互相补偿</li>
+<li>[ ] 加分项不会把已命中的模板扣分盖过去（否则明确写下"总分不用于判定"）</li>
+<li>[ ] 阈值有负样本标定过的证据；没标定就明说"未标定"</li>
+<li>[ ] 分数不与流量/推荐挂钩，不做因果承诺</li>
+<li>[ ] 有"未通过怎么办"的三档流程，不是只有及格/不及格</li>
+<li>[ ] 规则改动带回归样本（本文第四节的两次修正都是负样本发现的）</li>
+<li>[ ] 不把检测结果当"是不是 AI 写的"的证据</li>
+<li>[ ] 输出同时给人看（行号+改法）和给机器用（<code>--json</code> + 退出码）</li>
+<li>[ ] 明确写出边界：只测空转成分，不测真实性、不测读者反应</li>
+</ul>
+<hr />
+<h2>边界声明（本工具不做什么）</h2>
+<ul>
+<li>不调用模型，不判断文本"是不是 AI 生成的"，只数空转成分；</li>
+<li>不做事实核查，"数字密度"只看密度、不看真假（编造的数字同样计入密度，这是刻意的：密度是"有没有信息可核对"的下限读数，不是真实性判据）；</li>
+<li>不保证流量、推荐、完读率；</li>
+<li>不适用于诗歌、意识流、实验文体：那些文体里"句子整齐"和"没有数字"可能是刻意的；</li>
+<li>字数 &lt; 150 的文本统计量会剧烈波动，只跑词表部分更稳。</li>
+</ul>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
