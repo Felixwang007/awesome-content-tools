@@ -1,0 +1,8 @@
+# 生成物（复现时会重新产出）
+*.pdf
+*.png
+*.jpg
+*.mp3
+*.wav
+__pycache__/
+run.log

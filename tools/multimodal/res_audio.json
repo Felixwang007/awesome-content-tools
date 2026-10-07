@@ -1,0 +1,49 @@
+{
+  "gt_chars": 106,
+  "rows": [
+    {
+      "case": "合成语音",
+      "audio_s": 29.21,
+      "mp3_kb": 171.1,
+      "kbps": 48.0,
+      "tokens_est": 1461
+    },
+    {
+      "case": "small int8 直转",
+      "audio_s": 29.21,
+      "wall_s": 2.5,
+      "rtf": 0.0855,
+      "segments": 6,
+      "chars": 102,
+      "cer_strict_pct": 25.64,
+      "cer_norm_pct": 20.75,
+      "asr_text": "各位同事,下面通报一下本周的进度。第一,设备采购合同已经在9月30日签署。合同编号是SD-2026,金额386000元。第二,安装调试的工期是45个日历日,请项目组在10月15日之前提交施工计划。第三,验收合格后支付65%的款项。"
+    },
+    {
+      "case": "去掉数字表达形式后",
+      "cer_pct": 0.0,
+      "non_numeric_chars": 76,
+      "note": "7 处差异全部是「九月三十日→9月30日」这类数字书写形式，语义错误 0"
+    },
+    {
+      "case": "尾部拼 60s 静音 · vad 关",
+      "audio_s": 89.21,
+      "wall_s": 52.65,
+      "rtf": 0.5902,
+      "segments": 6,
+      "chars": 102,
+      "cer_norm_pct": 44.34,
+      "tokens_est": 4461
+    },
+    {
+      "case": "同一文件 · vad 开",
+      "audio_s": 89.21,
+      "wall_s": 2.54,
+      "rtf": 0.0285,
+      "segments": 6,
+      "chars": 102,
+      "cer_norm_pct": 45.28,
+      "tokens_est": 4461
+    }
+  ]
+}

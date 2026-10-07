@@ -1,0 +1,77 @@
+{
+  "gt_chars": 391,
+  "rows": [
+    {
+      "case": "原始 200dpi",
+      "scale": 1.0,
+      "w": 1654,
+      "h": 2339,
+      "png_kb": 170.4,
+      "vision_tokens": 3485,
+      "ocr_s": 2.81,
+      "boxes": 13,
+      "chars": 391,
+      "cer_pct": 0.26
+    },
+    {
+      "case": "0.75x",
+      "scale": 0.75,
+      "w": 1240,
+      "h": 1754,
+      "png_kb": 122.3,
+      "vision_tokens": 2125,
+      "ocr_s": 2.01,
+      "boxes": 14,
+      "chars": 392,
+      "cer_pct": 0.26
+    },
+    {
+      "case": "0.5x",
+      "scale": 0.5,
+      "w": 827,
+      "h": 1169,
+      "png_kb": 73.7,
+      "vision_tokens": 1105,
+      "ocr_s": 1.88,
+      "boxes": 14,
+      "chars": 390,
+      "cer_pct": 0.51
+    },
+    {
+      "case": "0.35x",
+      "scale": 0.35,
+      "w": 578,
+      "h": 818,
+      "png_kb": 43.9,
+      "vision_tokens": 765,
+      "ocr_s": 1.74,
+      "boxes": 15,
+      "chars": 357,
+      "cer_pct": 11.51
+    },
+    {
+      "case": "0.25x",
+      "scale": 0.25,
+      "w": 413,
+      "h": 584,
+      "png_kb": 29.6,
+      "vision_tokens": 425,
+      "ocr_s": 1.76,
+      "boxes": 14,
+      "chars": 355,
+      "cer_pct": 25.32
+    },
+    {
+      "case": "0.25x 放大4倍",
+      "scale": 1.0,
+      "w": 1652,
+      "h": 2336,
+      "png_kb": 281.0,
+      "vision_tokens": 3485,
+      "ocr_s": 2.21,
+      "boxes": 14,
+      "chars": 334,
+      "cer_pct": 35.29
+    }
+  ]
+}

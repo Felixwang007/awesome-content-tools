@@ -1,0 +1,88 @@
+{
+  "gt_chars": 391,
+  "rows": [
+    {
+      "route": "口径对照：不归一化",
+      "cer_pct": 23.53,
+      "note": "改口径就多出的假误差（GT 483 字符 vs 归一化 391 字符）"
+    },
+    {
+      "route": "文本层 get_text()",
+      "sec": 0.0112,
+      "chars": 391,
+      "vision_tokens": 0,
+      "cer_pct": 0.0
+    },
+    {
+      "route": "渲染 72dpi → OCR",
+      "dpi": 72,
+      "w": 595,
+      "h": 842,
+      "sec": 1.69,
+      "chars": 391,
+      "png_kb": 70.4,
+      "vision_tokens": 765,
+      "cer_pct": 0.0
+    },
+    {
+      "route": "渲染 100dpi → OCR",
+      "dpi": 100,
+      "w": 827,
+      "h": 1170,
+      "sec": 1.81,
+      "chars": 391,
+      "png_kb": 110.2,
+      "vision_tokens": 1105,
+      "cer_pct": 0.0
+    },
+    {
+      "route": "渲染 150dpi → OCR",
+      "dpi": 150,
+      "w": 1240,
+      "h": 1755,
+      "sec": 2.56,
+      "chars": 391,
+      "png_kb": 174.8,
+      "vision_tokens": 2125,
+      "cer_pct": 0.26
+    },
+    {
+      "route": "渲染 200dpi → OCR",
+      "dpi": 200,
+      "w": 1653,
+      "h": 2339,
+      "sec": 2.62,
+      "chars": 391,
+      "png_kb": 235.7,
+      "vision_tokens": 3485,
+      "cer_pct": 0.0
+    },
+    {
+      "route": "渲染 300dpi → OCR",
+      "dpi": 300,
+      "w": 2480,
+      "h": 3509,
+      "sec": 1.91,
+      "chars": 391,
+      "png_kb": 362.5,
+      "vision_tokens": 6035,
+      "cer_pct": 0.0
+    },
+    {
+      "route": "扫描件 get_text()",
+      "sec": 0.00833,
+      "chars": 0,
+      "vision_tokens": 0,
+      "cer_pct": 100.0,
+      "note": "无文本层：返回空字符串且不报错"
+    },
+    {
+      "route": "扫描件 渲染200dpi → OCR",
+      "sec": 0.98,
+      "chars": 391,
+      "png_kb": 235.0,
+      "vision_tokens": 3485,
+      "cer_pct": 0.0
+    }
+  ]
+}
