@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "windows-agent-automation-pitfalls-guide": {
+        "title": "Windows 上跑 AI Agent 自动化：同一个 /tmp 有两个、端口被系统留着、PYTHONPATH 会劫持 import",
+        "description": "Windows 上跑 AI Agent 自动化的三类环境坑与实测数据：bash 与原生程序的 /tmp 指向不同目录（文件写了下游读不到）、端口落在 Hyper-V/WSL 保留段报 WinError 10013、PYTHONPATH 继承导致子进程 import 别人项目的模块。含 11 条规则的自检工具 win_env_doctor（29 项 selftest）、原生命令编码 GBK/UTF-8 混用的解码策略、后台进程脱离会话与安全杀进程、12 项上线检查清单。",
+        "keywords": "Windows,AI Agent,自动化,/tmp,PYTHONPATH,WinError 10013,端口保留,Hyper-V,git-bash,MSYS,编码GBK,自检工具,环境变量污染,Playwright自动化",
+    },
     "agent-multimodal-input-guide": {
         "title": "AI Agent 多模态输入实战指南：图片、PDF、音频的预处理管线与成本悬崖",
         "description": "2026年AI Agent多模态输入工程实战（全部数字为本机实跑）：三类模态的计费公式（视觉瓦片85+170×瓦片数／音频按秒／文本按字符，同一页合同送图3485 token vs 转文本391 token差8.9倍）、图片缩放五档实测（1.0x→0.5x省68.3% token而错误率仅0.26%→0.51%，0.35x崩到11.51%、0.25x崩到25.32%）、放大不回血（0.25x放大4倍后错误率反升到35.29%且token花回满额）、PDF两条路线（文本层get_text 0.0112s/0token/0错误 vs 渲染200dpi+OCR 2.62s/3485token，快234倍）、扫描件静默失败（空字符串不报错0.0083s，只看调用成功会拿到0字）、渲染dpi从72到300（token涨7.9倍而错误率始终0-0.26%，「提分辨率买准确率」是伪命题）、字高悬崖实测（≥10px稳定0%，≤6px崩到12-24%，7-8px抖动且诚实标注样本仅25字不足）、大图缩小vs直接渲染小字（同一等效7px，一条0%一条32%）、音频静音计费（拼60s静音token 1461→4461，墙钟2.5s→52.65s，VAD开回到2.54s）、不可复现实证（同一文件同参数连跑三次段数11/6/12、字符179/102/179、CER 113.21%/44.34%/113.21%）、VAD开三次完全一致、评测口径的三层假误差（文本层23.53%→0%；ASR严格25.64%/归一化20.75%/去数字书写形式0.00%；繁简导致45.28%而真实同音错误仅2处）、可跑工具mm_budget.py（15项selftest零依赖）与bench_multimodal.py（五个子命令复现全部表格）、12项上线检查、边界声明。",

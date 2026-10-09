@@ -1,0 +1,47 @@
+{
+  "os": "nt",
+  "python": {
+    "executable": "C:/app/venv/Scripts/python.exe",
+    "version": "3.13.5",
+    "sys_path": [
+      "C:\u0007pp",
+      "C:\u0007pp\\Lib"
+    ],
+    "env": {
+      "PYTHONPATH": "",
+      "PYTHONHOME": ""
+    }
+  },
+  "temp": {
+    "native_slash_tmp": "C:\tmp",
+    "shell_slash_tmp": "C:\tmp",
+    "TEMP": "C:\\scratch\tmp",
+    "TMPDIR": "C:\\scratch\tmp"
+  },
+  "ports": {
+    "excluded": [
+      [
+        1066,
+        1365
+      ]
+    ],
+    "probed": {
+      "8300": "OK",
+      "8400": "OK"
+    }
+  },
+  "encoding": {
+    "stdout": "utf-8",
+    "cmd_echo": "utf-8"
+  },
+  "filesystem": {
+    "scratch": "C:\\scratch\tmp",
+    "writable": true
+  },
+  "paths_in_env": {
+    "candidates": {
+      "TMPDIR": "C:\\scratch\tmp"
+    }
+  },
+  "long_paths": true
+}

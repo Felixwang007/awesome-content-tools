@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Windows 上跑 AI Agent 自动化：同一个 /tmp 有两个、端口被系统留着、PYTHONPATH 会劫持 import</title>
+    <meta name="description" content="Windows 上跑 AI Agent 自动化的三类环境坑与实测数据：bash 与原生程序的 /tmp 指向不同目录（文件写了下游读不到）、端口落在 Hyper-V/WSL 保留段报 WinError 10013、PYTHONPATH 继承导致子进程 import 别人项目的模块。含 11 条规则的自检工具 win_env_doctor（29 项 selftest）、原生命令编码 GBK/UTF-8 混用的解码策略、后台进程脱离会话与安全杀进程、12 项上线检查清单。">
+    <meta name="keywords" content="Windows,AI Agent,自动化,/tmp,PYTHONPATH,WinError 10013,端口保留,Hyper-V,git-bash,MSYS,编码GBK,自检工具,环境变量污染,Playwright自动化">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/windows-agent-automation-pitfalls-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>Windows 上跑 AI Agent 自动化：同一个 /tmp 有两个、端口被系统留着、PYTHONPATH 会劫持 import</h1>
+<p>Agent 在 Windows 上跑自动化，最常见的三类"没有报错的失败"：</p>
+<ul>
+<li>脚本 exit 0，日志也正常，但<strong>下游读不到文件</strong>——因为写和读的两个进程看到的 <code>/tmp</code> 不是同一个目录。</li>
+<li>服务起不来，报 <code>WinError 10013</code>，代码里找不到任何问题——因为<strong>那个端口被 Windows 预留给 Hyper-V/WSL/Docker 了</strong>，谁都不许绑。</li>
+<li>子进程一启动就崩，或者 import 到别的项目的同名模块——因为<strong>父进程的 <code>PYTHONPATH</code> 被继承了</strong>，解释器找包的顺序和你想的不一样。</li>
+</ul>
+<p>这三类都不是模型的问题，也不是框架的问题，是 Windows 环境的问题。本文所有数字都来自本机实跑（Windows 11 / git-bash / Python 3.13），复现脚本在仓库 <code>tools/winenv/</code>，一份真实快照存在 <code>tools/winenv/samples/live_snapshot.json</code>。</p>
+<hr />
+<h2>一、同一个 <code>/tmp</code>，在 bash 和原生程序里是两个目录</h2>
+<p>先看实测。同一个时刻，同一个词 <code>/tmp</code>：</p>
+<pre><code class="language-bash">$ cd /tmp &amp;&amp; pwd -W                     # shell 眼里
+C:/Users/&lt;user&gt;/AppData/Local/Temp
+
+$ python -c &quot;import os;print(os.path.abspath('/tmp'))&quot;   # 原生程序眼里
+C:\tmp
+</code></pre>
+<p>证据不止于路径打印。用原生 <code>curl</code> 往 <code>/tmp</code> 写一个文件：</p>
+<pre><code class="language-bash">$ curl -s -o /tmp/curl_probe.txt https://example.com -w &quot;http=%{http_code}\n&quot;
+http=200
+$ ls -la C:/tmp/curl_probe.txt
+-rw-r--r-- 1 Administrator 197121 577 10月  9 14:01 C:/tmp/curl_probe.txt
+</code></pre>
+<p>文件确实落到了 <code>C:\tmp</code>。而在同一个 bash 会话里 <code>ls /tmp</code> 列出来的是另一批文件（<code>AppData\Local\Temp</code> 里的东西）。<strong>两条路径都"存在"，都"可写"，都不报错</strong>——所以这类失败永远不会出现在日志里，只会出现在"为什么下游拿不到文件"这种问题里。</p>
+<p>机制：git-bash/MSYS 给 shell 内建命令（<code>cd</code>/<code>ls</code>/重定向）做了自己的路径映射，<code>/tmp</code> 是 MSYS 安装目录下的挂载点；而给<strong>原生 Windows 程序</strong>（python/curl/node/git）传 <code>/tmp</code>，它只是一个相对当前盘符的路径，落到 <code>C:\tmp</code>。两个世界各自自洽。</p>
+<p>更常见的变体是传 <code>/c/Users/...</code> 这种 MSYS 风格路径给原生程序。在本机（MSYS 路径转换被关闭）它不会被翻译成 <code>C:\Users\...</code>，而是被当成相对路径 <code>c/Users/...</code>，于是文件写到意料之外的地方，或者报 <code>No such file or directory</code>，而报错的命令看起来完全正确。</p>
+<h3>修法</h3>
+<table>
+<thead>
+<tr>
+<th>做法</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>绝对路径 + 正斜杠原生形式</td>
+<td>给 git/curl/node/python 传 <code>C:/Users/.../file.txt</code>，不要传 <code>/c/...</code>，也不要传 <code>/tmp/...</code></td>
+</tr>
+<tr>
+<td>统一暂存目录</td>
+<td>全流程只用一个目录（如 <code>TMPDIR</code> 指向的 scratch），由脚本显式创建并传入，不依赖任何工具的默认临时目录</td>
+</tr>
+<tr>
+<td>写后读校验</td>
+<td>写入后立刻用同一个进程读回并打印路径与字节数，路径分歧会当场暴露，而不是在三步之后</td>
+</tr>
+<tr>
+<td>别用 <code>/tmp</code> 当常量</td>
+<td>把临时目录做成参数或环境变量，而不是硬编码在脚本里</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>二、被系统预留的端口：<code>WinError 10013</code> 不是代码问题</h2>
+<p>Windows 会把成段端口留给 Hyper-V / WSL / Docker 等组件。本机实测：</p>
+<pre><code class="language-bash">$ netsh int ipv4 show excludedportrange protocol=tcp
+开始端口    结束端口
+      1066        1165
+      1166        1265
+      1266        1365
+      4265        4364
+      4365        4464
+      4465        4564
+     50000       50059     *
+</code></pre>
+<p>带 <code>*</code> 的是"管理的端口排除"（系统动态保留）。落在这七段里的端口，绑定一定失败。逐个实测绑定：</p>
+<table>
+<thead>
+<tr>
+<th>端口</th>
+<th>落在</th>
+<th>绑定结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1241</td>
+<td>1166–1265</td>
+<td><strong>FAIL errno 13</strong>（WinError 10013，访问权限不允许）</td>
+</tr>
+<tr>
+<td>1300</td>
+<td>1266–1365</td>
+<td><strong>FAIL errno 13</strong></td>
+</tr>
+<tr>
+<td>7860</td>
+<td>段外</td>
+<td>OK</td>
+</tr>
+<tr>
+<td>8300</td>
+<td>段外</td>
+<td>OK</td>
+</tr>
+<tr>
+<td>50010</td>
+<td>50000–50059 管理段</td>
+<td>本次 OK（管理段是动态的，今天能绑不代表明天能绑）</td>
+</tr>
+</tbody>
+</table>
+<p>值得注意的三点：</p>
+<ol>
+<li><strong>报错信息误导人</strong>。"以一种访问权限不允许的方式做了一个访问套接字的尝试"听起来像杀毒软件或权限问题，实际是端口在保留段里。</li>
+<li><strong>段不是固定的</strong>。排除段会随 Hyper-V/WSL/Docker 的启停重新计算。上个月能跑的 1241，今天就在段里——这是典型的"昨天还好好的"。</li>
+<li><strong>硬编码端口 = 定时炸弹</strong>。遇到过的最硬的一例是某个本地 UI 把端口写死在 7860，而目标机器上 7786–7885 全在保留段内，进程连启动的机会都没有（这不是代码能重试解决的问题，重试一百次也是 errno 13）。</li>
+</ol>
+<h3>修法</h3>
+<pre><code class="language-bash"># 1. 先看排除段（每次部署前都看，不要缓存）
+netsh int ipv4 show excludedportrange protocol=tcp
+
+# 2. 用 Python 探测目标端口是否真的能绑（比&quot;端口没被占用&quot;更准）
+python -c &quot;import socket;s=socket.socket();s.bind(('127.0.0.1',8300));print('OK')&quot;
+</code></pre>
+<ul>
+<li>服务端口选 1024–49151 之间的<strong>固定段</strong>，避开 49152+ 动态段（会被系统随机占用）。</li>
+<li>端口用配置项，不要写死；绑定失败时<strong>换端口</strong>而不是重试同一个端口。</li>
+<li>启动脚本里加一行前置探测，失败就带着"排除段清单"报错退出，让排障从 30 分钟变成 10 秒。</li>
+</ul>
+<hr />
+<h2>三、<code>PYTHONPATH</code> 继承：子进程 import 到别的项目</h2>
+<p>实测三段（同一台机器、同一个解释器）：</p>
+<pre><code class="language-bash">$ python -c &quot;import fake_mod&quot;                       # 没有 PYTHONPATH
+ModuleNotFoundError: No module named 'fake_mod'
+
+$ PYTHONPATH=&quot;C:/scratch/pp_demo&quot; python -c &quot;import fake_mod;print(fake_mod.POLLUTED)&quot;
+child imported foreign module, POLLUTED= 1          # 静默命中外部模块
+
+$ PYTHONPATH=&quot;C:/scratch/pp_demo&quot; env -u PYTHONPATH python -c &quot;import os;print(os.environ.get('PYTHONPATH'))&quot;
+None                                                # 键被删掉，干净
+</code></pre>
+<p><code>PYTHONPATH</code> 在前面，<code>sys.path</code> 里自己应用的路径在后面——所以只要目录里有同名模块，子进程就会用别人的。在 Agent 自动化里这特别容易发生，因为一个宿主程序经常被 <code>subprocess</code> 用来驱动好几个不同项目的 venv。</p>
+<p>症状往往是这三类之一，而且日志里看不到"路径串味"的字样：</p>
+<ul>
+<li><strong><code>0xC0000142</code>（DLL 初始化失败）</strong>：加载到另一个环境的 <code>torch_python.dll</code> / <code>_imaging.pyd</code> 等，只报一个退出码。</li>
+<li><strong>模块版本错</strong>：同名包却是另一个版本，报的错是"这个函数不存在"，看着像代码写错了。</li>
+<li><strong>C 扩展不兼容</strong>：例如 cp311 的 <code>.pyd</code> 被 cp314 的解释器加载，报 <code>ModuleNotFoundError</code> 而包明明装着。</li>
+</ul>
+<h3>修法：三层防御，缺一层就会漏</h3>
+<pre><code class="language-python"># 第 1 层：入口文件最顶部，任何业务 import 之前
+import sys
+sys.path = [p for p in sys.path if &quot;hermes-agent&quot; not in p]   # 换成&quot;不属于本应用的路径&quot;
+
+# 第 2 层：清环境变量——用 pop 删键，不要设成空字符串
+import os
+for k in list(os.environ):
+    if k.startswith(&quot;PYTHON&quot;):
+        os.environ.pop(k, None)
+</code></pre>
+<pre><code class="language-bat">:: 第 3 层：启动脚本里删键（set X= 是删除，set X=&quot;&quot; 仍会泄漏空串）
+@echo off
+set PYTHONPATH=
+set PYTHONHOME=
+&quot;%VENV%\Scripts\python.exe&quot; app.py
+</code></pre>
+<p>还有一个容易漏的点：<strong>别用 <code>--reload</code></strong>。开发服务器 reload 出来的子进程继承的是 shell 的环境，不是你进程里改过的 <code>os.environ</code>——第 1、2 层防御会在 reload 那一刻失效。</p>
+<hr />
+<h2>四、附带两坑：编码不统一、后台进程随会话陪葬</h2>
+<h3>编码：同一台机器上，不同原生命令的编码不一样</h3>
+<pre><code>cmd /c echo 中文测试        →  按 UTF-8 解码：UnicodeDecodeError: invalid continuation byte
+                            →  按 GBK 解码：中文测试            ✅
+netsh ... excludedportrange →  按 UTF-8 解码：正常
+</code></pre>
+<p>同一个宿主、同一时刻，<code>cmd</code> 的提示语是 GBK，<code>netsh</code> 的输出是 UTF-8。所以"统一用 UTF-8 读子进程输出"这句话在 Windows 上不成立，正确姿势是<strong>先试 UTF-8、失败回退 GBK，并且永远带 <code>errors="replace"</code></strong>，同时把"解码失败"当成可见事件而不是静默替换：</p>
+<pre><code class="language-python">def decode(raw: bytes) -&gt; str:
+    for enc in (&quot;utf-8&quot;, &quot;gbk&quot;):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode(&quot;utf-8&quot;, &quot;replace&quot;)   # 两条路都失败：留下替换符，别吞掉
+</code></pre>
+<h3>进程生命周期：<code>nohup</code> 挡不住会话结束</h3>
+<ul>
+<li><code>nohup cmd &amp;</code> 在 Windows 上<strong>不能</strong>让进程脱离 bash 会话，会话结束照样被杀——于是"启动成功"的服务在几分钟后消失，日志戛然而止，看不出原因。要让进程真正脱离，用 PowerShell 起独立进程并把 stdout/stderr 重定向到文件：</li>
+</ul>
+<pre><code class="language-bash">powershell -Command &quot;Start-Process -WindowStyle Hidden -FilePath 'C:\app\app.exe' -RedirectStandardOutput 'C:\app\logs\out.log' -RedirectStandardError 'C:\app\logs\err.log'&quot;
+</code></pre>
+<ul>
+<li><code>taskkill //F //PID 1234</code> 在 git-bash 里会报 <strong><code>错误: 无效参数/选项 - '//F'</code></strong>（本机实测）——因为路径转换被关闭，<code>//F</code> 没有被改写成 <code>/F</code>。改用 <code>cmd //c taskkill /F /PID 1234</code>，或者 <code>powershell -Command "Stop-Process -Id 1234 -Force"</code>。</li>
+<li>清理进程时<strong>不要 blanket kill</strong>。<code>taskkill /F /IM node.exe</code> 会顺手杀掉你的 n8n、MCP 服务、编辑器插件宿主；按端口或按 PID 精确杀。</li>
+</ul>
+<hr />
+<h2>五、别靠猜：11 条规则的一次性体检</h2>
+<p>上面每一条都能写成脚本，<code>tools/winenv/win_env_doctor.py</code> 就是干这个的（纯标准库、零依赖、不联网）：</p>
+<pre><code class="language-bash">python tools/winenv/win_env_doctor.py selftest     # 29 项自检，退出码即结论
+python tools/winenv/win_env_doctor.py scan         # 采集本机并出报告（退出码 0/2/3）
+python tools/winenv/win_env_doctor.py scan --json --out report.json
+python tools/winenv/win_env_doctor.py scan --input samples/live_snapshot.json   # 离线复算
+python tools/winenv/win_env_doctor.py explain TMP_DIVERGENCE
+</code></pre>
+<p>本机实跑结果（原文照抄）：</p>
+<pre><code>win_env_doctor 体检报告  ——  PASS 6 / WARN 3 / FAIL 2
+------------------------------------------------------------------------
+[FAIL] TMP_DIVERGENCE       同一个 /tmp 在两个世界里指向不同目录：原生程序=C:\tmp，shell=C:/Users/&lt;user&gt;/AppData/Local/Temp
+       修法: 两边都别用 /tmp：显式写绝对路径，或统一用 TMPDIR 指向的暂存目录
+[PASS] MSYS_PATH_IN_ENV     未发现 MSYS 风格路径
+[PASS] PYTHONPATH_POLLUTION PYTHONPATH 未被设置
+[PASS] PYTHONHOME_SET       PYTHONHOME 未被设置
+[WARN] SYS_PATH_FOREIGN     sys.path 混入了其它应用的 site-packages（5 条）
+[FAIL] PORT_RESERVED        这些端口绑不了：1241∈[1166,1265], 1300∈[1266,1365]
+[WARN] PORT_EPHEMERAL_TRAP  探测端口落在动态端口段（49152+）：50010
+[WARN] CONSOLE_ENCODING     原生命令输出是 GBK（stdout=utf-8）
+[PASS] SCRATCH_NOT_WRITABLE 暂存目录可写：C:\Users\&lt;user&gt;\AppData\Local\Temp
+[PASS] SCRATCH_PATH_DIRTY   暂存路径为 ASCII 且无空格
+[PASS] LONG_PATHS_DISABLED  长路径支持已开启
+------------------------------------------------------------------------
+探测端口: {&quot;1241&quot;: &quot;BLOCKED&quot;, &quot;1300&quot;: &quot;BLOCKED&quot;, &quot;7860&quot;: &quot;OK&quot;, &quot;8300&quot;: &quot;OK&quot;, &quot;50010&quot;: &quot;OK&quot;}
+排除段:   [[1066,1165],[1166,1265],[1266,1365],[4265,4364],[4365,4464],[4465,4564],[50000,50059]]
+------------------------------------------------------------------------
+结论: 有失败项，先修再跑。   exit=3
+</code></pre>
+<p>规则表：</p>
+<table>
+<thead>
+<tr>
+<th>规则</th>
+<th>触发条件</th>
+<th>级别</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TMP_DIVERGENCE</td>
+<td>原生 <code>/tmp</code> 与 shell <code>/tmp</code> 解析到不同目录</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>MSYS_PATH_IN_ENV</td>
+<td>环境变量里有 <code>/c/...</code> 形态路径</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>PYTHONPATH_POLLUTION</td>
+<td><code>PYTHONPATH</code> 非空</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>PYTHONHOME_SET</td>
+<td><code>PYTHONHOME</code> 被设置</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>SYS_PATH_FOREIGN</td>
+<td><code>sys.path</code> 含其它应用的 site-packages</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>PORT_RESERVED</td>
+<td>探测端口落在排除段内且绑定失败</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>PORT_EPHEMERAL_TRAP</td>
+<td>探测端口 ≥ 49152（动态段）</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>CONSOLE_ENCODING</td>
+<td>原生命令输出按 UTF-8 解不开</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>SCRATCH_NOT_WRITABLE</td>
+<td>暂存目录写入失败</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>SCRATCH_PATH_DIRTY</td>
+<td>暂存路径含空格/非 ASCII</td>
+<td>WARN</td>
+</tr>
+<tr>
+<td>LONG_PATHS_DISABLED</td>
+<td><code>LongPathsEnabled=0</code> 或读不到</td>
+<td>WARN</td>
+</tr>
+</tbody>
+</table>
+<p>退出码约定：<code>0</code> 全过、<code>2</code> 有警告、<code>3</code> 有失败。另外一条是给自己定的：<strong>采集不到的项一律判 WARN，不判 PASS</strong>。"没有数据"和"数据正常"是两件事——这条规则是踩出来的，见下一节。</p>
+<hr />
+<h2>六、自检工具自己也会假成功</h2>
+<p>第一版脚本里，shell 侧 <code>/tmp</code> 的采集是用 <code>bash -lc "cd /tmp &amp;&amp; pwd -W"</code> 做的。实跑时这次调用返回了空字符串，而规则写的是"采集不到就跳过"——于是报告里 <code>TMP_DIVERGENCE</code> 显示 <strong>PASS</strong>。真相反过来：<strong>恰恰是存在分歧的那台机器上，这项检查静默失效了</strong>。修法是两处：采集函数按 <code>bash -c</code> → <code>bash --noprofile --norc -c</code> → <code>sh -c</code> 依次重试；规则改成"只采到一半 → WARN（不是通过）"。</p>
+<p>这类问题值得单独记一笔，因为它和被测系统的失败模式是同一个：<strong>"检查没跑"和"检查通过"共用了一个输出</strong>。任何自检工具的默认值都应该是"未知/不可判"，只有在<strong>主动比对成功</strong>之后才允许输出 PASS。</p>
+<p>因此脚本自带 <code>selftest</code>：29 项断言覆盖每条规则的触发与不触发（包括"只采到一半必须 WARN""段外的 BLOCKED 不归因于保留段""空快照必须被识别为缺 6 个必需键"），退出码非 0 就说明工具本身坏了，而不是环境干净。</p>
+<pre><code>$ python tools/winenv/win_env_doctor.py selftest
+  ...
+selftest: 29/29
+</code></pre>
+<hr />
+<h2>七、上线前检查清单（12 项）</h2>
+<ol>
+<li>临时目录是显式路径（来自配置/<code>TMPDIR</code>），脚本里没有裸 <code>/tmp</code>。</li>
+<li>给原生程序传的路径是 <code>C:/...</code> 形态，没有 <code>/c/...</code>、没有裸 <code>/tmp</code>。</li>
+<li>关键产物写入后<strong>同进程读回</strong>校验（路径 + 字节数），失败即报错。</li>
+<li>服务端口来自配置，且不在 <code>netsh</code> 排除段内（每次部署重新查）。</li>
+<li>启动前对目标端口做一次真实 <code>bind</code> 探测，失败带排除段清单退出。</li>
+<li>启动子进程时 <code>PYTHONPATH</code>/<code>PYTHONHOME</code> 不存在（用 <code>env -u</code> 或 <code>set X=</code> 删键）。</li>
+<li>入口文件在业务 import 前过滤 <code>sys.path</code>。</li>
+<li>不依赖 <code>--reload</code>；若使用，确认子进程也走了清理逻辑。</li>
+<li>读子进程输出用"UTF-8 → GBK 回退 + <code>errors='replace'</code>"，并把解码回退记进日志。</li>
+<li>常驻服务用 <code>Start-Process -WindowStyle Hidden</code> 脱离会话，日志重定向到文件。</li>
+<li>杀进程按 PID/端口，禁止 <code>taskkill /IM node.exe</code> 这类批量杀。</li>
+<li>上线后 <code>win_env_doctor scan</code> 留一份快照，出问题时拿快照复算（<code>scan --input</code>），别靠回忆。</li>
+</ol>
+<hr />
+<h2>八、边界声明</h2>
+<ul>
+<li>本文数据采集环境是 Windows 11（build 28000）+ git-bash + Python 3.13/3.14，排除段、端口可绑性、命令编码会随 Hyper-V/WSL/Docker 状态和系统版本变化，<strong>数字是当次实测结果，不是常量</strong>；结论是"要先探测再依赖"，不是"这几个端口不行"。</li>
+<li><code>win_env_doctor.py</code> 只做只读探测（读环境变量、试绑端口、写一个临时文件再删除），不改注册表、不改系统设置；<code>LONG_PATHS_DISABLED</code> 在无管理员权限时读不到注册表，会按 WARN 处理。</li>
+<li>工具只覆盖环境层，不检查业务逻辑：环境全绿不等于 Agent 产出正确。产出正确性要在业务侧用可外部寻址的证据（文件、URL、数据库行）验证。</li>
+</ul>
+<p>复现材料都在仓库里：</p>
+<ul>
+<li><code>tools/winenv/win_env_doctor.py</code> —— 体检工具（含 29 项 selftest）</li>
+<li><code>tools/winenv/samples/live_snapshot.json</code> —— 本文的原始快照（已脱敏），<code>scan --input</code> 可直接复算</li>
+<li><code>tools/winenv/samples/clean_snapshot.json</code> —— 干净样例，退出码应为 0</li>
+</ul>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>

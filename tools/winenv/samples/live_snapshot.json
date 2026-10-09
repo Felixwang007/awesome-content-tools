@@ -1,0 +1,86 @@
+{
+  "os": "nt",
+  "python": {
+    "executable": "C:\\Users\\<user>\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+    "version": "3.11.15",
+    "sys_path": [
+      "C:\\Users\\<user>\\awesome-content-tools\\tools\\winenv",
+      "C:\\Users\\<user>\\AppData\\Roaming\\uv\\python\\cpython-<ver>",
+      "C:\\Users\\<user>\\AppData\\Roaming\\uv\\python\\cpython-<ver>",
+      "C:\\Users\\<user>\\AppData\\Roaming\\uv\\python\\cpython-<ver>",
+      "C:\\Users\\<user>\\AppData\\Roaming\\uv\\python\\cpython-<ver>",
+      "C:\\Users\\<user>\\AppData\\Local\\hermes\\hermes-agent\\venv",
+      "C:\\Users\\<user>\\AppData\\Local\\hermes\\hermes-agent\\venv\\Lib\\site-packages",
+      "__editable__.hermes_agent-0.21.3.finder.__path_hook__",
+      "C:\\Users\\<user>\\tools\\shortdrama-pipeline\\src",
+      "C:\\Users\\<user>\\AppData\\Local\\hermes\\hermes-agent\\venv\\Lib\\site-packages\\win32",
+      "C:\\Users\\<user>\\AppData\\Local\\hermes\\hermes-agent\\venv\\Lib\\site-packages\\win32\\lib",
+      "C:\\Users\\<user>\\AppData\\Local\\hermes\\hermes-agent\\venv\\Lib\\site-packages\\Pythonwin"
+    ],
+    "env": {
+      "PYTHONPATH": "",
+      "PYTHONHOME": ""
+    }
+  },
+  "temp": {
+    "native_slash_tmp": "C:\\tmp",
+    "shell_slash_tmp": "C:/Users/<user>/AppData/Local/Temp",
+    "TEMP": "C:\\Users\\<user>\\AppData\\Local\\Temp",
+    "TMPDIR": "C:\\Users\\<user>\\AppData\\Local\\Temp"
+  },
+  "ports": {
+    "excluded": [
+      [
+        1066,
+        1165
+      ],
+      [
+        1166,
+        1265
+      ],
+      [
+        1266,
+        1365
+      ],
+      [
+        4265,
+        4364
+      ],
+      [
+        4365,
+        4464
+      ],
+      [
+        4465,
+        4564
+      ],
+      [
+        50000,
+        50059
+      ]
+    ],
+    "probed": {
+      "1241": "BLOCKED",
+      "1300": "BLOCKED",
+      "7860": "OK",
+      "8300": "OK",
+      "50010": "OK"
+    }
+  },
+  "encoding": {
+    "stdout": "utf-8",
+    "cmd_echo": "gbk"
+  },
+  "filesystem": {
+    "scratch": "C:\\Users\\<user>\\AppData\\Local\\Temp",
+    "writable": true
+  },
+  "paths_in_env": {
+    "candidates": {
+      "TMPDIR": "C:\\Users\\<user>\\AppData\\Local\\Temp",
+      "PATH": "C:\\tools\\katana;C:\\Users\\<user>\\.local\\bin;C:\\Users\\<user>\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\usr\\local\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\usr\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\usr\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\opt\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\mingw64\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\usr\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\agent-browser-0.26.0-win32-x64\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\cua-driver-0.21.0-win32-x64;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\ffmpeg-9.0.1-win32-x64\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\cmd;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\git-2.53.0+3-win32-x64\\usr\\bin;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\node-26.7.0-win32-x64;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\npm-12.0.2-win32-x64;C:\\Users\\<user>\\AppData\\Local\\hermes\\tools\\python-<ver>",
+      "HOME": "C:\\Users\\<user>"
+    }
+  },
+  "long_paths": true
+}
