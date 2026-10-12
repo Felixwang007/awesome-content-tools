@@ -104,3 +104,7 @@
 ## 📄 License
 
 MIT
+
+## tools/scanfresh
+
+`scan_freshness_guard.py` — detects a scheduled scan that keeps re-reporting its last snapshot (stale panel / identical trailing ledger run / frozen verification ledger). 18/18 selftest, exit 0·2·3.
