@@ -58,6 +58,11 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 """
 
 META = {
+    "cli-gate-false-green-audit-guide": {
+        "title": "门禁工具自己怎么查体：一条静态规则命中率只有 11%，而它漏掉的那个才是真缺陷",
+        "description": "给校验脚本/linter/自检工具做体检的实战记录（全部数字为本机实跑）：核心缺陷形态「空集合满足全称命题」——扫描范围 0 个文件时「没有发现问题」自动成立，于是 0 个文件被判成满分/可以合并（真实样本：某代码审查包 SKILL.md 自证「可直接拿来做 CI 门禁」，指向空目录却输出「审查范围: 0 个文件，0 行」「健康分: 100/100 — ✅ 可以合并」并 exit 0）。三轮判据迭代：①静态规则 6 条扫 29 个技能包 141 个 .py（GATE_FAIL 24/WEAK 29/CLEAN 88；G001×20、G002×8、G003×9、G004×4、G005×30、G006×33 即 positional 26/flag 3/两套都有 4）②动态探针（48 个 scripts 脚本 × 空目录/无参数各一次，44/48 正确拒绝空输入，2 个确认缺陷、4 个只打用法退 0）③契约层（读 SKILL.md 判断工具是否自称门禁）。关键读数：静态 G003 precision 1/9=11%、recall 1/2=50%，8 个误报中 5 个把 `%d 个文件` 格式串读成真实零；G004 precision 1/4=25% 且其中一个静态指对了工具说错了机制（静态称无参数成功，实测 exit 1，真洞在空目录维度）；G001 命中 20 个但动态 18/20 都正确拒绝空输入——事实与含义是两回事。动态层自身也会误报（把性能计时器当门禁），故引入契约层 reads_as_gate；三层读数并排放让矛盾显形（license_check.py 三层互斥=需人看）。工具 gate_lint.py 纯标准库 selftest 38/38、退出码三态（0 通过/2 有 high 或抓到放行/3 零输入不算通过）、probe 默认拒绝执行需 --allow-exec、台账核对行保证每个观测恰好落进一个桶（第一版曾静默吞掉 1 行）。含 12 项上线检查清单与边界声明。",
+        "keywords": "门禁工具,自检工具,false green,假绿灯,零输入,空集合全称命题,exit code,退出码三态,扫描范围,健康分,linter自检,selftest,静态规则精度,precision,recall,动态探针,契约层,SKILL.md契约,CI门禁,pre-commit,判据外置,一致性核对,观测台账,CLI体检,Python标准库,Agent工程质量,AI工具可靠性",
+    },
     "windows-agent-automation-pitfalls-guide": {
         "title": "Windows 上跑 AI Agent 自动化：同一个 /tmp 有两个、端口被系统留着、PYTHONPATH 会劫持 import",
         "description": "Windows 上跑 AI Agent 自动化的三类环境坑与实测数据：bash 与原生程序的 /tmp 指向不同目录（文件写了下游读不到）、端口落在 Hyper-V/WSL 保留段报 WinError 10013、PYTHONPATH 继承导致子进程 import 别人项目的模块。含 11 条规则的自检工具 win_env_doctor（29 项 selftest）、原生命令编码 GBK/UTF-8 混用的解码策略、后台进程脱离会话与安全杀进程、12 项上线检查清单。",

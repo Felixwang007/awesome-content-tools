@@ -1,0 +1,67 @@
+{
+  "corpus": {
+    "packages": 29,
+    "py_files": 141,
+    "scripts_layer_probed": 48
+  },
+  "static": {
+    "total_files": 141,
+    "verdicts": {
+      "GATE_FAIL": 24,
+      "GATE_WEAK": 29,
+      "GATE_CLEAN": 88
+    },
+    "rule_hits": {
+      "G001_NO_SELFTEST": 20,
+      "G006_CONVENTION": 33,
+      "G005_TWO_STATE_EXIT": 30,
+      "G003_ZERO_SCOPE_CANDIDATE": 9,
+      "G004_NOARG_SUCCESS": 4,
+      "G002_SELFTEST_NO_COUNT": 8
+    },
+    "g006_convention": {
+      "positional": 26,
+      "flag": 3,
+      "both": 4
+    }
+  },
+  "dynamic": {
+    "probed": 48,
+    "claims_gate_packages": 21,
+    "emptydir_verdicts": {
+      "REJECTED": 44,
+      "ZERO_SCOPE_GREEN": 2,
+      "GREEN_UNKNOWN_SCOPE": 2
+    },
+    "noarg_verdicts": {
+      "REJECTED": 42,
+      "HELP_EXIT_ZERO": 4,
+      "GREEN_UNKNOWN_SCOPE": 2
+    },
+    "emptydir_exit_codes": {
+      "2": 34,
+      "1": 8,
+      "0": 4,
+      "4": 1,
+      "3": 1
+    },
+    "noarg_exit_codes": {
+      "3": 3,
+      "2": 32,
+      "1": 5,
+      "0": 6,
+      "4": 2
+    },
+    "confirmed_defect_scripts": [
+      "code-review-assistant/code_review.py",
+      "secret-leak-guard/profile_scan.py"
+    ]
+  },
+  "cross": {
+    "g003_static_candidates": 9,
+    "dynamic_zero_scope_green": 2,
+    "intersection": 1,
+    "g003_precision": "1/9",
+    "g003_recall": "1/2"
+  }
+}

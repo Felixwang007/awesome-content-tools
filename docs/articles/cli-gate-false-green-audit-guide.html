@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>门禁工具自己怎么查体：一条静态规则命中率只有 11%，而它漏掉的那个才是真缺陷</title>
+    <meta name="description" content="给校验脚本/linter/自检工具做体检的实战记录（全部数字为本机实跑）：核心缺陷形态「空集合满足全称命题」——扫描范围 0 个文件时「没有发现问题」自动成立，于是 0 个文件被判成满分/可以合并（真实样本：某代码审查包 SKILL.md 自证「可直接拿来做 CI 门禁」，指向空目录却输出「审查范围: 0 个文件，0 行」「健康分: 100/100 — ✅ 可以合并」并 exit 0）。三轮判据迭代：①静态规则 6 条扫 29 个技能包 141 个 .py（GATE_FAIL 24/WEAK 29/CLEAN 88；G001×20、G002×8、G003×9、G004×4、G005×30、G006×33 即 positional 26/flag 3/两套都有 4）②动态探针（48 个 scripts 脚本 × 空目录/无参数各一次，44/48 正确拒绝空输入，2 个确认缺陷、4 个只打用法退 0）③契约层（读 SKILL.md 判断工具是否自称门禁）。关键读数：静态 G003 precision 1/9=11%、recall 1/2=50%，8 个误报中 5 个把 `%d 个文件` 格式串读成真实零；G004 precision 1/4=25% 且其中一个静态指对了工具说错了机制（静态称无参数成功，实测 exit 1，真洞在空目录维度）；G001 命中 20 个但动态 18/20 都正确拒绝空输入——事实与含义是两回事。动态层自身也会误报（把性能计时器当门禁），故引入契约层 reads_as_gate；三层读数并排放让矛盾显形（license_check.py 三层互斥=需人看）。工具 gate_lint.py 纯标准库 selftest 38/38、退出码三态（0 通过/2 有 high 或抓到放行/3 零输入不算通过）、probe 默认拒绝执行需 --allow-exec、台账核对行保证每个观测恰好落进一个桶（第一版曾静默吞掉 1 行）。含 12 项上线检查清单与边界声明。">
+    <meta name="keywords" content="门禁工具,自检工具,false green,假绿灯,零输入,空集合全称命题,exit code,退出码三态,扫描范围,健康分,linter自检,selftest,静态规则精度,precision,recall,动态探针,契约层,SKILL.md契约,CI门禁,pre-commit,判据外置,一致性核对,观测台账,CLI体检,Python标准库,Agent工程质量,AI工具可靠性">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/cli-gate-false-green-audit-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>门禁工具自己怎么查体：一条静态规则命中率只有 11%，而它漏掉的那个才是真缺陷</h1>
+<p>校验脚本、linter、体检工具——这类东西的价值全在一个前提上：<strong>它自己是对的</strong>。它一旦坏掉，坏的方式不是报错，而是<strong>放行</strong>。放行不产生任何日志，也没有人会发现。</p>
+<p>常见的坏法只有一种形状：<strong>空集合满足全称命题</strong>。检查范围是 0 个文件时，「没有发现问题」自动成立，于是「0 个文件」被判成「满分 / 可以合并 / 通过」。这不是理论推演，下面第 2 节是本机真实语料里的实例。</p>
+<p>问题是：怎么给这类工具查体？我用同一批语料（<strong>29 个技能包 / 141 个 .py</strong>）做了三轮，每轮都被上一轮的误报逼着改判据，最后得到的结论比工具本身更值得记：</p>
+<blockquote>
+<p>「这是不是一个缺陷」不是被测出来的，是<strong>测出来的行为</strong>加上<strong>工具自己声称的契约</strong>一起判出来的。少任何一半，误报率都在 50% 以上。</p>
+</blockquote>
+<p>工具在 <a href="https://github.com/Felixwang007/awesome-content-tools/blob/main/tools/gate/gate_lint.py"><code>tools/gate/gate_lint.py</code></a>（纯标准库，<code>selftest</code> 38/38，退出码三态）。</p>
+<hr />
+<h2>1. 先看一个能对上号的样本</h2>
+<p>本机有个代码审查技能包，它的 <code>SKILL.md</code> 里写着这样一句契约：</p>
+<blockquote>
+<p>退出码：<code>0</code> 无致命问题，<code>2</code> 存在致命问题，<strong>可直接拿来做 CI 门禁</strong>。</p>
+</blockquote>
+<p>把它的扫描目标指向一个<strong>空目录</strong>，它输出：</p>
+<pre><code>- 审查范围: 0 个文件，0 行
+- 健康分: 100/100 — ✅ 可以合并
+</code></pre>
+<p>退出码 <code>0</code>。</p>
+<p>对一个<strong>自己声明是门禁</strong>的工具，「我读了 0 个文件」和「我没发现问题」用了同一个退出码。CI 里路径写错、挂载没生效、git checkout 落到空目录——都会拿到绿灯。这种缺陷静态看不出来，因为它长得和「跑了且干净」一模一样。</p>
+<hr />
+<h2>2. 第一层：静态规则（只读文本，不执行任何东西）</h2>
+<p>规则六条，都只读源码文本：</p>
+<table>
+<thead>
+<tr>
+<th>规则</th>
+<th>级别</th>
+<th>判什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>G001_NO_SELFTEST</td>
+<td>high</td>
+<td>门禁工具自身没有自检入口</td>
+</tr>
+<tr>
+<td>G002_SELFTEST_NO_COUNT</td>
+<td>medium</td>
+<td>有自检但不打印断言计数（「全部通过」≠「12/12 通过」）</td>
+</tr>
+<tr>
+<td>G003_ZERO_SCOPE_CANDIDATE</td>
+<td>medium</td>
+<td>零范围文案与通过口径同现</td>
+</tr>
+<tr>
+<td>G004_NOARG_SUCCESS</td>
+<td>high</td>
+<td>无参数调用没有非零退出</td>
+</tr>
+<tr>
+<td>G005_TWO_STATE_EXIT</td>
+<td>medium</td>
+<td>退出码只有两态，无法区分「输入错」与「发现问题」</td>
+</tr>
+<tr>
+<td>G006_CONVENTION</td>
+<td>info</td>
+<td>自检入口约定（位置参数 / <code>--flag</code>）</td>
+</tr>
+</tbody>
+</table>
+<p>扫 141 个文件（命中数）：</p>
+<pre><code>GATE_FAIL 24 / GATE_WEAK 29 / GATE_CLEAN 88
+
+G001_NO_SELFTEST         20
+G002_SELFTEST_NO_COUNT    8
+G003_ZERO_SCOPE_CANDIDATE 9
+G004_NOARG_SUCCESS        4
+G005_TWO_STATE_EXIT      30
+G006_CONVENTION          33     （positional 26 / flag 3 / 两套都有 4）
+</code></pre>
+<p>G005 命中 30 个不是危言耸听：本仓脚本里「非零退出」基本只有一种写法，动态读数（第 3 节）显示空目录那一次出现过的退出码是 <strong>2 → 34 次、1 → 8 次、3 → 1 次、4 → 1 次</strong>。也就是说 <code>1</code>（通用错误）和 <code>2</code>（发现问题）在同一批工具里被混用，上层拿到 <code>1</code> 无法判断该重试还是该报警。</p>
+<p>G006 那 26/3/4 的分布本身就是结论：<strong>统一 harness 如果只认一种约定，就会静默漏跑另一批工具的自检</strong>。所以 <code>gate_lint.py</code> 两种都认（<code>selftest</code> 与 <code>--selftest</code>）。</p>
+<hr />
+<h2>3. 静态读数有多准？拿动态真跑一遍对答案</h2>
+<p>静态规则只能给<strong>候选</strong>，因为它读的是文本。给 48 个带 <code>scripts/</code> 的脚本各跑两次（<strong>无参数一次、空目录一次</strong>），用真实退出码和输出对答案：</p>
+<pre><code>- 探针执行: 48 个脚本
+- 契约自查: 声称自己是门禁的包 21 个
+- 已确认缺陷（空目录仍给绿灯 且 契约声称是门禁）: 2 个
+- 观察项（同样行为，但契约没声称是门禁，不当缺陷）: 0 个
+- 无参数即绿灯（契约声称是门禁）: 0 个
+- 无参数即绿灯（契约未声称门禁，观察项）: 2 个
+- 无参数只打用法退 0（轻微，不计缺陷）: 4 个
+- 空目录输入被拒（exit≠0）: 44 个
+- 无参数输入被拒（exit≠0）: 42 个
+- 台账核对: 空目录 48/48，无参数 48/48（不等就是有观测被吞了）
+</code></pre>
+<p><strong>44/48 拒绝空输入</strong>——这批工具整体是健康的，坏的是少数。两个确认缺陷：</p>
+<table>
+<thead>
+<tr>
+<th>包 / 脚本</th>
+<th>空目录退出码</th>
+<th>观测</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>code-review-assistant / code_review.py</td>
+<td>0</td>
+<td>「0 个文件」+「健康分 100/100 — ✅ 可以合并」</td>
+</tr>
+<tr>
+<td>secret-leak-guard / profile_scan.py</td>
+<td>0</td>
+<td>明确报告扫到 0 个仍给绿灯</td>
+</tr>
+</tbody>
+</table>
+<p>现在把静态和动态并排，看 G003 那条规则到底值多少：</p>
+<pre><code>静态候选 9 个   动态零范围绿灯 2 个
+precision = 1/9 = 11%
+recall    = 1/2 = 50%
+
+HIT   code-review-assistant/code_review.py
+MISS  secret-leak-guard/profile_scan.py
+FP ×8（8 个文件被静态点名但动态跑完全正常）
+</code></pre>
+<p><strong>命中率 11%。</strong>八个误报里有 5 个是同类：源码里存在 <code>print("- 扫描范围: %d 个文件" % len(files))</code> 这种格式化串，静态把 <code>%d 个文件</code> 读成了真实的零。它在文本里和真的 0 长得完全一样——这就是「静态无法定论」的字面意思。</p>
+<p>顺带一个反直觉的读数：G001（无自检入口）命中的 20 个文件里，18 个在动态里都正确拒绝了空输入（exit 1 或 2）。静态陈述「这个工具没有 selftest」<strong>是事实</strong>，但它暗示的「这工具不可靠」<strong>被行为否掉了 18/20 次</strong>。事实和含义是两回事。</p>
+<hr />
+<h2>4. 第二层也会误报：同行为、不同契约</h2>
+<p>动态探针把 <code>profile_scan.py</code> 也判成了缺陷。但翻它的 <code>SKILL.md</code>，这脚本的角色行写的是：</p>
+<pre><code>scripts/profile_scan.py    性能回归：定位哪个文件 / 规则慢
+</code></pre>
+<p>它是<strong>计时分析器</strong>，不是门禁。空目录跑 0 个文件、退 0——完全正确。动态探针只看行为，<strong>没有能力区分「这是门禁」还是「这是计算器」</strong>。</p>
+<p>所以判定必须叠一层契约：读该包 <code>SKILL.md</code>，只有它同时<strong>提到门禁/CI/pre-commit 用途</strong>且<strong>文档化了退出码</strong>，才承认它是门禁，才把「空范围给绿灯」算成缺陷。翻回 <code>code-review-assistant</code>——那句「可直接拿来做 CI 门禁」就在它自己文档里，<strong>它自证了门禁身份，然后违反了它</strong>。</p>
+<p>这一层加进去以后，<code>profile_scan.py</code> 从「缺陷」降级为「观察项」——它不是错的，只是它的行为被放错了语境。</p>
+<p>三轮下来每一轮都在杀上一轮的误报，但没有任何一层能单独下结论。真正稳的是把三层读数并排放，<strong>让不一致自己显形</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>脚本</th>
+<th>静态层</th>
+<th>动态层（空目录 / 无参数）</th>
+<th>契约层</th>
+<th>处置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>code_review.py</td>
+<td>G004 high</td>
+<td>0 绿灯 / exit 1</td>
+<td>自称门禁 ✔</td>
+<td><strong>确认缺陷</strong></td>
+</tr>
+<tr>
+<td>profile_scan.py</td>
+<td>G001 high</td>
+<td>0 绿灯 / exit 2</td>
+<td>自称计时器 ✘</td>
+<td>观察项（行为正确，语境不符）</td>
+</tr>
+<tr>
+<td>license_check.py</td>
+<td>G004 high</td>
+<td>exit 1 / <strong>exit 0 绿灯</strong></td>
+<td>正则判非门禁</td>
+<td><strong>三者不一致 → 必须人看</strong></td>
+</tr>
+<tr>
+<td>env_doctor.py</td>
+<td>G004 high</td>
+<td>exit 2 / exit 2</td>
+<td>自称门禁 ✔</td>
+<td>静态误报，行为无问题</td>
+</tr>
+<tr>
+<td>retry_doctor.py</td>
+<td>G004 high</td>
+<td>exit 2 / exit 2</td>
+<td>正则判非门禁</td>
+<td>静态误报</td>
+</tr>
+</tbody>
+</table>
+<p>G004 四个静态命中，动态只证实 1 个（<code>license_check.py</code> 的无参数绿灯），另 1 个（<code>code_review.py</code>）<strong>指向对的工具、说错了机制</strong>——静态说「无参数会成功」，实测无参数 <code>exit 1</code>；真正的洞在空目录那一维。剩下 2 个是纯误报。<strong>precision = 1/4 = 25%。</strong></p>
+<p><code>license_check.py</code> 那行是这套方法最有价值的产出：三层读数互相矛盾，等于给出一张「这里需要人看一眼」的票。工具不替人下结论，但保证矛盾不会被静默吞掉。</p>
+<hr />
+<h2>5. 工具自己也会吞数据</h2>
+<p>第一版 <code>probe</code> 的桶是这样分的：确认缺陷 / 无参数绿灯 / 只打用法 / 被拒。写完一跑，5 个无参数绿灯的脚本里只列出 4 个——第 5 个（一个公文生成器）既没进缺陷桶、也没进用法桶，<strong>它消失了</strong>。</p>
+<p>这就是本文开头那个病，只不过长在体检工具自己身上：<strong>没有进任何桶的观测，和被拒绝的观测，在汇总里长得一样</strong>。修法是在输出里加一行核对：</p>
+<pre><code>- 台账核对: 空目录 48/48，无参数 48/48（不等就是有观测被吞了）
+- 无参数即绿灯（契约未声称门禁，观察项）: 2 个
+</code></pre>
+<p>每个观测必须恰好落进一个桶，桶的总数必须等于探针执行数。不等就是有东西被吞了。<strong>汇总口径要能被核对，不能只被相信。</strong></p>
+<hr />
+<h2>6. 用法</h2>
+<pre><code class="language-bash"># 静态扫描（不执行被检脚本）
+python gate_lint.py scan &lt;目录或文件...&gt; [--glob &quot;*.py&quot;] [--min medium] [--json]
+
+# 动态探针：空目录 + 无参数各跑一次（会执行被检脚本，默认拒绝运行）
+python gate_lint.py probe &lt;包目录&gt; --allow-exec [--timeout 8] [--json]
+
+# 自检：两套约定都支持
+python gate_lint.py selftest
+python gate_lint.py --selftest
+</code></pre>
+<p>退出码三态，为的是让上层区分「没跑」和「跑干净」：</p>
+<table>
+<thead>
+<tr>
+<th>退出码</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>扫到文件且无 high 级发现 / 探针没抓到放行</td>
+</tr>
+<tr>
+<td>2</td>
+<td>存在 high 级发现 / 探针抓到零范围放行 / <code>probe</code> 未确认 <code>--allow-exec</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>零输入，没扫到任何文件——不算通过</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>probe</code> 因为要执行被检脚本，默认直接拒绝运行并返回 2，必须显式给 <code>--allow-exec</code>。扫别人的代码库时，默认行为绝不应该是「跑起来看看」。</p>
+<p>自检覆盖：规则正反例、<code>100/100</code> 这种评分语境不算断言计数（这是检测器自身的第一条误报来源）、帮助文本与零范围报告的区别、契约层四态、空文本/CRLF/零文件渲染边界、以及<strong>工具对自身文本的判定必须是干净的</strong>（<code>ok 自身不命中 G003</code>）。38/38 通过。</p>
+<hr />
+<h2>7. 边界声明</h2>
+<ul>
+<li><strong>只测本机语料</strong>：29 个技能包、141 个 <code>.py</code>（其中 48 个在 <code>scripts/</code> 层、可被 <code>probe</code> 执行）。数字是这批语料的读数，不是行业基准。</li>
+<li><strong>不贴私有内容</strong>：包名、脚本名、行号、退出码、计数是执行证据；正文不含任何凭据、路径正文或业务数据。</li>
+<li><strong><code>probe</code> 会执行被检代码</strong>。这是它的能力也是它的风险，所以默认关闭、需要显式放行；对不信任的目录只用 <code>scan</code>。</li>
+<li><strong>契约粒度比缺陷主体粗一档</strong>：契约判据读的是<strong>包级</strong> <code>SKILL.md</code>，而缺陷主体是<strong>脚本</strong>。一个自称门禁的包里如果混着计时器、生成器，会被按包级契约误判——<code>profile_scan.py</code> 就是这类。</li>
+<li><strong>契约正则精度有限</strong>：<code>reads_as_gate</code> 靠「提到门禁/CI + 文档化退出码」两个条件，会漏（<code>license_check.py</code>）也会过判。它是用来把明显不是门禁的东西排除掉，不是用来精确识别门禁。</li>
+<li><strong>静态规则不是判据，是筛子</strong>：G003 precision 11%、G004 25%。它的用处是把 141 个文件缩到 9 个需要动态确认，而不是下结论。</li>
+<li><strong>48/141 的覆盖率</strong>：<code>probe</code> 只覆盖 <code>scripts/</code> 一层的 CLI，库文件、被 import 的模块、生成器不在此列。</li>
+</ul>
+<hr />
+<h2>8. 上线检查清单</h2>
+<ol>
+<li>门禁工具必须有自检入口，且自检打印<strong>断言计数</strong>（<code>n/m</code>），不是一句「全部通过」。</li>
+<li><strong>零输入必须返回独立的非成功状态</strong>（与「发现了问题」用不同退出码）。</li>
+<li>退出码至少三态：成功 / 发现问题 / 输入错误。<code>1</code> 不要拿来兼当「发现问题」。</li>
+<li>报告里必须写出<strong>扫描范围</strong>（文件数/行数），不能只输出结论。</li>
+<li>报告里出现 <code>0 个文件</code> 时，禁止同时输出满分或「可以合并」。</li>
+<li>声明自己是门禁（写入文档、配进 CI）的工具，契约与退出码必须逐条对齐，并且<strong>被自己的文档约束</strong>。</li>
+<li>自检入口的调用约定要写明（位置参数还是 <code>--flag</code>），统一 harness 两种都得认。</li>
+<li>静态检查类工具要写清 precision/recall——它不是判据，是筛子。</li>
+<li>动态探针类工具要提供「不执行」的路径，执行必须显式放行。</li>
+<li>汇总口径要能核对：每个观测恰好落进一个桶，桶总和 == 输入总数。</li>
+<li>判定「算不算缺陷」时把契约（工具声称自己是什么）作为输入，别只靠行为。</li>
+<li>三层读数不一致时<strong>不要自动下结论</strong>，输出「需要人看」的票。</li>
+</ol>
+<hr />
+<h2>9. 可复用的三条</h2>
+<p><strong>一、空集合永远满足全称命题。</strong> 「我没有发现问题」和「我什么都没看」必须在接口层就分开，而不是靠读日志区分。</p>
+<p><strong>二、判据要靠外，但「缺陷」这个词必须有对象。</strong> 同一个行为，对门禁是缺陷，对计时器是正常。所以判定链是：行为（动态）× 契约（工具声称的身份）= 结论。少了契约，误报率立刻过半。</p>
+<p><strong>三、规则给候选，不许给结论。</strong> 静态规则最诚实的位置是「筛子」：把 141 个文件缩到 9 个值得动态确认的目标。让它直接下判决，你会得到 11% 的精度和 8 张假罚单。</p>
+<p>配套工具与语料：<code>tools/gate/gate_lint.py</code>（纯标准库，<code>selftest</code> 38/38，退出码 0/2/3）。</p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
