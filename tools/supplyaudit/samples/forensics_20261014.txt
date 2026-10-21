@@ -1,0 +1,39 @@
+== repo_forensics v1.0.0 | 样本 30 个 | 2026-10-14 06:09 UTC ==
+repo                                       verdict            ★  fork比      首发延迟     体积KB watch  形/理由
+PS5Dev/Byepervisor-Reborn                  NEEDS_EYES       369 0.2358     1572s       18 235/SPRE 无 license; 体积 18KB < 60KB
+overdriveps5/overdrive-releases            NEEDS_EYES       330 0.1333    62442s        2 242/SPRE 无 license; 体积 2KB < 60KB
+spideymooon/McOracle                       NEEDS_EYES       210 0.0238      967s    13663 210/SPRE 无 license; fork/star 0.0238 < 0.03
+x4gpanell/MarzbanUpdate                    NEEDS_EYES       135  1.837      200s      623 -      无 license; 首发延迟 200s < 900s（一次性搬运形态）
+ns2250225/guangzhou                        NEEDS_EYES       120 0.2333      179s      159 -      无 license; 首发延迟 179s < 900s（一次性搬运形态）
+jonwheatley/pixel-path                     NEEDS_EYES       120  0.075       51s     7078 -      无 license; 首发延迟 51s < 900s（一次性搬运形态）
+Dushiqi1987/codex-remote-bridge            NEEDS_EYES       114 0.0965      671s       28 -      无 license; 体积 28KB < 60KB; 首发延迟 671s < 900s（一次性搬运形态）
+jhaizhou-ops/d2r-mobile                    ORGANIC         1298 0.3544   162356s     6001 202/SPRE 四条结构判据全部未触发
+Arekejoker/qwen21-nsfw-pose-skill          ORGANIC          992 0.2238    89434s    34067 229/SPRE 无 license
+zhuyansen/new-term-radar                   ORGANIC          889 0.4038    95574s     1150 213/SPRE 四条结构判据全部未触发
+CoolkHz/gptibo                             ORGANIC          499 0.5872    38607s     1599 189/SPRE 四条结构判据全部未触发
+HeyPuter/everything                        ORGANIC          352 0.1733    49620s   429426 -      四条结构判据全部未触发
+juliobsz/skills                            ORGANIC          313 0.0256    89880s     1022 263/SPRE fork/star 0.0256 < 0.03
+threerocks/sweety-handdraw-video           ORGANIC          309 0.2233    88710s    44415 -      四条结构判据全部未触发
+egotoadcitadel/palette-from-image-ai       ORGANIC          303 0.2574      117s      816 236/SPRE 首发延迟 117s < 900s（一次性搬运形态）
+deeplethe/solid-glass                      ORGANIC          256 0.0078   106355s    17141 230/SPRE fork/star 0.0078 < 0.03
+madeyexz/louisa-wifi                       ORGANIC          224 0.0357    84193s     1580 -      四条结构判据全部未触发
+yeyuxin777/baoyan-agent-benchmark          ORGANIC          217    0.0   104275s    15791 254/SPRE fork/star 0.0000 < 0.03
+w16638771062/mccarbon                      ORGANIC          205 0.0878    77448s      719 -      四条结构判据全部未触发
+leolobato/playden-ps5                      ORGANIC          176 0.0511   134438s    91240 -      四条结构判据全部未触发
+AirsupHQ/machine-skill                     ORGANIC          159 0.1006    61912s    17276 -      四条结构判据全部未触发
+WilderNoTrack/mcd-calorie-butler           ORGANIC          149  0.094     3055s       83 -      四条结构判据全部未触发
+semrincaballero/Polymarket-Prediction-Bot  ORGANIC          148 0.1689   152378s    13623 -      四条结构判据全部未触发
+cxm947/FakeLiang                           ORGANIC          136 0.0441   111836s     1453 -      无 license
+jiayx/d2r-mobile-build                     ORGANIC          135  0.437   155932s      134 -      无 license
+pLabs5/pLinux5-NG                          ORGANIC          135 0.1037   100340s      211 -      四条结构判据全部未触发
+keyu-tian-sabotage/keyu-tian-sabotage.gith ORGANIC          125  0.032    36699s      208 -      无 license
+rzc156/dreamforge                          ORGANIC          123 0.0244     7335s     6213 -      fork/star 0.0244 < 0.03
+michaelshimeles/glide                      ORGANIC          120 0.0667    40223s     4729 -      四条结构判据全部未触发
+madong-code/madong-aura                    ORGANIC          120 0.0667    22537s    19067 -      四条结构判据全部未触发
+
+跨库共用域名（一个 campaign 的形态线索）: {"github.com": ["jiayx/d2r-mobile-build", "madong-code/madong-aura"]}
+
+分布: NEEDS_EYES=7, ORGANIC=23
+阈值: {"first_push_fast_s": 900, "tiny_size_kb": 60, "low_fork_ratio": 0.03, "watch_burst_share": 0.5, "watch_min_events": 10}
+提醒: WatchEvent 只覆盖最近 90 天且上限 300 条 → 计数是下界；阈值是启发式不是判决。
+已写出: samples/forensics_20261014.json

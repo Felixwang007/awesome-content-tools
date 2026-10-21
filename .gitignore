@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 push_*.py
+tools/supplyaudit/samples/events/

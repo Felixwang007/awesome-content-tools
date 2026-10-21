@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>装 AI 技能/工具之前的三层验尸：1105 星的仓库里只有一个 README，写着「不要信这个仓库」</title>
+    <meta name="description" content="2026-10-21 本机实跑的供应链审计记录，三个样本对应三层检查，任何一层单独用都会给出「看起来正确」的错误结论。①结构取证（离线读 GitHub API 回包，不解包不 import）：30 个 created:>10-14 的仓库判 FARM_SUSPECT=1/NEEDS_EYES=2/ORGANIC=27，4 个无 license、4 个体积<60KB、星数中位数 1093；同一套阈值在 10-14 那轮是 FARM_SUSPECT=0/NEEDS_EYES=7/ORGANIC=23——阈值是触发器不是测量。star:watch 被显式弃用：农场的 39.5 落在正常库 40.8~570.4 区间内，完全重叠。②内容静态审计（tar.gz 不解包、不落盘）：某 MIT 红队技能库 97 文件出 203 条 HIGH/MEDIUM（H5×125/M4×25/H6×21/M6×15/H4×8/H3×7/M3×1/H9×1），按文件类型拆开后 201 条在 .md、2 条在 .json、可执行代码 0 条，安装面 install.sh 是纯拷贝零网络——命中条数不携带风险，落点才携带。给出「安装即执行 > 导入即执行 > 需调用 > 仅文档」四档判别表。③读那个文件：被判 FARM_SUSPECT 的 1105 星仓库内容扫描 exit 0 CLEAN（1 个文件 0.00MB 零命中），而那唯一的 README 内容是作者本人声明「这里没有官方 XScreenSaver 仓库……你应当不要相信它」——结构层对、内容层对，结论只有第三层给得出。附带反直觉对照实验：两轮 60 个样本把 events 全部拿掉重跑，判定 0 处变化、reasons 含到达形态 0 条，说明 WatchEvent 挤簇判据在这批样本上从未当过判据，只是解释字段。含退出码四态语义（0 干净/2 需看/3 拒绝/4 零输入/5 自检失败，「没输入」不是「输入干净」）、两个工具 selftest 20/20 与 11/11 当场读数、扫描成本 158ms/206ms/944ms、今日踩坑「--quiet 会连 --json 审计证据一起安静掉」、装之前 12 项检查清单与边界声明。">
+    <meta name="keywords" content="供应链审计,AI技能安全,装工具之前,GitHub仓库取证,star农场,farm suspect,star:watch,fork比,首发延迟,tar.gz不解包扫描,静态规则,curl|bash,install hook,安装即执行,在场不等于危险,命中落点,退出码门禁,零输入假绿灯,selftest,WatchEvent,到达形态,挤簇,阈值校准,启发式不是事实,codeload,gh api,repo_forensics,supply_audit,AI Agent工程,零依赖Python">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-skill-supply-chain-audit-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>装 AI 技能/工具之前的三层验尸：1105 星的仓库里只有一个 README，写着「不要信这个仓库」</h1>
+<p>装别人的技能包、MCP 服务器、CLI 工具之前，我们通常做两个检查：看星数，看有没有人骂。两个都不算检查——星数衡量注意力，骂声衡量传播速度。</p>
+<p>本文是 2026-10-21 早上一次真实排查的完整记录，三个样本全部当场实测：</p>
+<ul>
+<li>一个 <strong>1105 星</strong>、创建 4 天的仓库，结构取证判 <code>FARM_SUSPECT</code>，内容扫描判 <code>CLEAN</code>，而<strong>整个仓库只有一个 README，内容是叫你别用这个仓库</strong>。</li>
+<li>一个 97 个文件、84 篇 SKILL.md 的红队技能库，内容扫描出 <strong>203 条 HIGH/MEDIUM 命中</strong>，判 <code>REJECT_REVIEW</code>——而 <strong>203 条全部落在 <code>.md</code> 里，安装路径上的代码一条没中</strong>。</li>
+<li>四个被今天这轮扫描判成 <code>CLEAN</code> 的仓库，其中一个是文件数 = 1。</li>
+</ul>
+<p>三个案例对应三层验尸，任何一层单独用都会给你一个"看起来正确"的错误结论。工具在仓库 <code>tools/supplyaudit/</code>，两份可复算的原始回包在 <code>samples/</code>。</p>
+<hr />
+<h2>一、第一层：结构取证（不看内容，只看形态）</h2>
+<p>第一层不解包、不 import、不联网——输入是 GitHub API 的原始回包，离线分析、可复算：</p>
+<pre><code class="language-bash">gh api &quot;search/repositories?q=created:&gt;2026-10-14+stars:&gt;50&amp;sort=stars&amp;per_page=30&quot; &gt; repos.json
+gh api repos/&lt;owner&gt;/&lt;repo&gt;/events &gt; events/&lt;owner&gt;__&lt;repo&gt;.json
+python repo_forensics.py analyze --repos repos.json --events-dir events/
+</code></pre>
+<p>判据是形态而不是热度：<strong>首发延迟</strong>（创建后多久就 push 完 = 一次性搬运还是长出来的）、<strong>fork/star 比</strong>（有没有人在二次使用）、<strong>体积</strong>（装不装得下工程）、<strong>WatchEvent 到达形态</strong>（星是摊开的还是一分钟内挤出来的）。</p>
+<p>今天这轮的读表（30 个仓库，<code>created:&gt;2026-10-14 stars:&gt;50</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>仓库</th>
+<th>判定</th>
+<th>★</th>
+<th>fork比</th>
+<th>首发延迟</th>
+<th>体积KB</th>
+<th>watch形态</th>
+<th>触发的理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>xscreensaver-official/xscreensaver</td>
+<td><strong>FARM_SUSPECT</strong></td>
+<td>1105</td>
+<td>0.029</td>
+<td>277s</td>
+<td>2</td>
+<td>28/SPREAD</td>
+<td>无 license；fork比 0.029 &lt; 0.03；体积 2KB &lt; 60KB；首发延迟 277s &lt; 900s</td>
+</tr>
+<tr>
+<td>JoasASantos/REA-Prompts</td>
+<td>NEEDS_EYES</td>
+<td>1113</td>
+<td>0.146</td>
+<td>94295s</td>
+<td>39</td>
+<td>26/SPREAD</td>
+<td>无 license；体积 39KB &lt; 60KB</td>
+</tr>
+<tr>
+<td>stackedlol/ascii-sharks</td>
+<td>NEEDS_EYES</td>
+<td>605</td>
+<td>0.073</td>
+<td>246s</td>
+<td>26</td>
+<td>28/SPREAD</td>
+<td>无 license；体积 26KB &lt; 60KB；首发延迟 246s &lt; 900s</td>
+</tr>
+<tr>
+<td>deepseek-ai/DeepInfer</td>
+<td>ORGANIC</td>
+<td>14831</td>
+<td>0.097</td>
+<td>421701s</td>
+<td>2965</td>
+<td>26/SPREAD</td>
+<td>四条结构判据全部未触发</td>
+</tr>
+<tr>
+<td>LiCinCan/blender-ai-mcp-addon</td>
+<td>ORGANIC</td>
+<td>947</td>
+<td>0.408</td>
+<td>360055s</td>
+<td>110274</td>
+<td>25/SPREAD</td>
+<td>四条结构判据全部未触发</td>
+</tr>
+<tr>
+<td>ctresb/leis</td>
+<td>ORGANIC</td>
+<td>541</td>
+<td>0.131</td>
+<td>522517s</td>
+<td>2527962</td>
+<td>27/SPREAD</td>
+<td>四条结构判据全部未触发</td>
+</tr>
+</tbody>
+</table>
+<p>分布：<code>FARM_SUSPECT=1, NEEDS_EYES=2, ORGANIC=27</code>；30 个里 4 个无 license、4 个体积 &lt; 60KB、星数中位数 1093。</p>
+<p><strong>同一个工具、同一套阈值，四天前（10-14 那轮）的分布是 <code>FARM_SUSPECT=0, NEEDS_EYES=7, ORGANIC=23</code>。</strong> 两次样本都是 30 个、都是 7 天窗口、阈值一个字没改，可疑率从 0% 变成 3.3%，<code>NEEDS_EYES</code> 从 7 掉到 2。这组对照说明的是阈值性质：<strong>它们是"把人叫过来看"的触发器，不是对世界的测量。</strong> 把这类分数接进 CI 当门禁，等于把某一天的样本分布焊成永久标准。</p>
+<h3>star:watch 为什么不做判据</h3>
+<p>星数除以 watch 数（真正点"关注"的人，比 star 稀缺得多）看起来是最有区分度的指标。今天这轮实测：</p>
+<ul>
+<li><code>FARM_SUSPECT</code> 那一个：<strong>39.5</strong></li>
+<li><code>NEEDS_EYES</code> 两个：42.8、21.6</li>
+<li><code>ORGANIC</code> 二十七个：40.8、44.0、47.9、56.3、68.4、71.0、71.5、72.5、109.8、144.8、522.1、570.4 …</li>
+</ul>
+<p>农场的 39.5 稳稳落在正常库的区间里（40.8 就不比它高）。<strong>这个指标在本机历史实测中一直落在 180–380，两类样本完全重叠——用它做判据等于用噪声。</strong> 工具因此显式不使用它，并把这个决定写进文档，而不是留给下一个人重新发现。</p>
+<h3>第一层的诚实边界</h3>
+<p><code>/repos/{r}/events</code> 只回最近 90 天、最多 300 条。所以：</p>
+<ul>
+<li><code>watch_count</code> 是<strong>下界</strong>，不是总数；</li>
+<li>到达形态只在可见窗口内成立；</li>
+<li>events 拿不到时，形态判据置为 <code>UNKNOWN</code>，<strong>不假装测过</strong>。</li>
+</ul>
+<p>今天 30 个仓库全部取到了 events，但表里 <code>span_hours</code> 有的只有 0.98 小时（REA-Prompts 26 个 watch 挤在 1 小时内但摊开分布）——窗口窄本身会让"挤簇"判据失效，这是样本量问题不是参数问题。</p>
+<h3>一个反直觉的实测：到达形态在这 60 个样本上从未改变过判决</h3>
+<p>两轮样本（10-14 的 30 个 + 10-21 的 30 个，合计 60 个仓库）做个对照实验——把 events 回包<strong>全部拿掉</strong>重跑，判定分布逐条比对：</p>
+<table>
+<thead>
+<tr>
+<th>样本</th>
+<th>带 events</th>
+<th>不带 events</th>
+<th>判定变化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10-14（30 个）</td>
+<td><code>NEEDS_EYES=7, ORGANIC=23</code></td>
+<td><code>NEEDS_EYES=7, ORGANIC=23</code></td>
+<td><strong>0 处</strong></td>
+</tr>
+<tr>
+<td>10-21（30 个）</td>
+<td><code>FARM_SUSPECT=1, NEEDS_EYES=2, ORGANIC=27</code></td>
+<td><code>FARM_SUSPECT=1, NEEDS_EYES=2, ORGANIC=27</code></td>
+<td><strong>0 处</strong></td>
+</tr>
+</tbody>
+</table>
+<p>再把 60 条 <code>reasons</code> 全过一遍：<strong>含到达形态（BURST/挤簇）的条目 = 0 条</strong>。也就是说，在这两轮真实样本上，WatchEvent 到达形态是一个<strong>解释性字段，从来没有当过判据</strong>——所有判定都由 license / 体积 / fork比 / 首发延迟这四条静态形态给出。</p>
+<p>这不是说到达形态没用（农场形态如果晚几天才开始刷星，静态判据会全部落空，那时只有挤簇能看出来），而是说：<strong>"某条判据在我的样本上生效过"这件事必须实测，不能假设。</strong> 一条从没触发过的判据和一个正确的判据，在输出上长得一模一样。</p>
+<hr />
+<h2>二、第二层：内容静态审计（不解包）</h2>
+<p>第一层告诉你"这个仓库的形态像不像话"，不告诉你"里面的代码会不会做事"。第二层把归档<strong>当作数据读</strong>，不落盘、不解包、不 import：</p>
+<pre><code class="language-bash">python supply_audit.py scan repo.tar.gz --json out.json
+</code></pre>
+<p>规则集 15 条，分 HIGH / MEDIUM 两级。今天拿一个真实的红队技能库当样本（MIT、84 篇 SKILL.md、97 个文件）：</p>
+<pre><code>文件: 共 97 | 扫了文本 95 | 二进制 0 | 超大跳过 0 | 共 4.47 MB
+命中规则: H5_credential_paths×125, M4_download_then_exec×25, H6_persistence×21,
+          M6_docs_pipe_shell×15, H4_reflective_pe_load×8, H3_invoke_expression×7,
+          M3_obfuscation×1, H9_base64_exec×1
+结论: REJECT_REVIEW (exit 3) — 有 HIGH 命中，默认不装
+</code></pre>
+<p>203 条命中，125 条是"读取凭据类路径"、25 条"下载后改权限执行"、21 条"写自启动"。按规则一算，这个包看起来像个后门合集。</p>
+<p><strong>但按文件类型拆开，结论完全反过来：</strong></p>
+<table>
+<thead>
+<tr>
+<th>规则</th>
+<th>落在代码文件</th>
+<th>落在文档/数据文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H5_credential_paths</td>
+<td>0</td>
+<td>125</td>
+</tr>
+<tr>
+<td>M4_download_then_exec</td>
+<td>0</td>
+<td>25</td>
+</tr>
+<tr>
+<td>H6_persistence</td>
+<td>0</td>
+<td>21</td>
+</tr>
+<tr>
+<td>M6_docs_pipe_shell</td>
+<td>0</td>
+<td>15</td>
+</tr>
+<tr>
+<td>H4_reflective_pe_load</td>
+<td>0</td>
+<td>8</td>
+</tr>
+<tr>
+<td>H3_invoke_expression</td>
+<td>0</td>
+<td>7</td>
+</tr>
+<tr>
+<td>M3_obfuscation / H9_base64_exec</td>
+<td>0</td>
+<td>1 / 1</td>
+</tr>
+<tr>
+<td><strong>合计</strong></td>
+<td><strong>0</strong></td>
+<td><strong>203</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>.md</code> 201 条、<code>.json</code> 2 条、可执行代码 <strong>0</strong> 条。再看安装面：这个包顶层是 <code>install.sh</code> + <code>convert_skills.py</code> + <code>tools/build_manifest.py</code>，<code>install.sh</code> 干的事是把 <code>Skills/</code> 目录<strong>拷贝</strong>到 <code>~/.claude/skills/</code>，没有一条网络请求、没有一条动态执行。扫描器对这三个文件零命中。</p>
+<p>所以正确的结论不是"这个包有 203 个危险点"，而是：</p>
+<blockquote>
+<p><strong>203 条全部是"文档里写着的攻击样例"，安装路径干净；风险在 prompt 层（把这些 SKILL.md 喂进 agent 上下文），不在安装层。</strong></p>
+</blockquote>
+<p>这就是 <code>REJECT_REVIEW</code> 里那个 <code>REVIEW</code> 的含义——它不是判决，是"你得亲手把每条命中的<strong>执行可达性</strong>分开"。</p>
+<h3>判别式：命中落点 vs 执行面</h3>
+<p>拿到命中列表后只问一个问题：<strong>这条字符串，什么时候会被执行？</strong></p>
+<table>
+<thead>
+<tr>
+<th>落点</th>
+<th>实际执行时机</th>
+<th>处置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>install.sh</code> / <code>setup.py</code> / <code>Makefile</code> / <code>.pth</code></td>
+<td><code>pip install</code> / <code>git clone</code> 后你手动跑的那一下</td>
+<td>最高优先级，逐条读完</td>
+</tr>
+<tr>
+<td><code>package.json</code> 的 <code>pre/post/install</code> 钩子里有网络下载（M1）</td>
+<td><code>npm install</code> 时<strong>自动</strong>执行</td>
+<td>等价于 <code>curl\|bash</code>，默认拒绝</td>
+</tr>
+<tr>
+<td>源码在<strong>导入时</strong>就发网络请求 / 拉二进制</td>
+<td><code>import</code> 即触发</td>
+<td>默认拒绝，与是否"官方"无关</td>
+</tr>
+<tr>
+<td>源码函数体里的能力（需要你调用）</td>
+<td>你主动调用时</td>
+<td>看它读什么路径、发去哪</td>
+</tr>
+<tr>
+<td>文档 / 示例 / 测试数据里的攻击字符串</td>
+<td><strong>除非你复制粘贴并运行</strong></td>
+<td>记录，不作否决理由</td>
+</tr>
+</tbody>
+</table>
+<p>今天这个包恰好是最后一行，而且是<strong>整包 100% 最后一行</strong>。反过来，一个 3 行的 <code>install.sh</code> 里藏着 <code>curl | sh</code>，只需要 1 条命中就该拒绝——<strong>命中条数不携带风险信息，落点携带。</strong></p>
+<p>扫描成本也是决策变量：22KB 归档 158ms、316KB 归档 206ms、2.1MB（解包 4.47MB / 97 文件）944ms。<strong>"装之前扫一遍"这件事没有时间成本这个借口。</strong></p>
+<hr />
+<h2>三、第三层：读那个文件</h2>
+<p>回到今天被判 <code>FARM_SUSPECT</code> 的那个仓库。第一层的四条理由全部成立（无 license、fork比 0.029、2KB、首发延迟 277s）。第二层的内容扫描：</p>
+<pre><code>文件: 共 1 | 扫了文本 1 | 二进制 0 | 超大跳过 0 | 共 0.00 MB
+命中规则: 无
+结论: CLEAN (exit 0)
+</code></pre>
+<p><strong>1 个文件、0.00 MB、零命中、exit 0。</strong> 如果只跑第二层，这是今天最干净的一个包。而这个唯一的文件内容是：</p>
+<blockquote>
+<p><strong>There is no official XScreenSaver GitHub repository.</strong><br />
+I am jwz, the author of XScreenSaver, and I do not publish a public source code repository. I publish releases as tar files on the official web site and only there. If you see any other XScreenSaver repository (on GitHub or elsewhere) that has nothing to do with me and <strong>you should not trust it.</strong></p>
+</blockquote>
+<p>1105 个星、4 天前创建、创建后 277 秒就推完、整个仓库一个 README——<strong>这个仓库不包含任何代码，它包含的是一条免责声明</strong>。</p>
+<p>这里必须诚实：这个仓库有两种可能，一种是作者本人占位以便劝退，一种是别人冒名后被发现。<strong>两种可能里，1105 个星都同样只衡量了注意力。</strong> 星不是可用性证据，也不是安全性证据——它只证明有人点了一下。</p>
+<p>三层各自的输出并排放：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>观测</th>
+<th>结论</th>
+<th>对决策的贡献</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>结构取证</td>
+<td>1105★/0.029/2KB/277s/无license</td>
+<td><code>FARM_SUSPECT</code></td>
+<td>指出"该来看一眼"，<strong>不能指出为什么</strong></td>
+</tr>
+<tr>
+<td>内容扫描</td>
+<td>1 文件 / 0 命中 / exit 0</td>
+<td><code>CLEAN</code></td>
+<td>技术上说真话："我这套规则没看到东西"</td>
+</tr>
+<tr>
+<td>读那一个文件</td>
+<td>全文 6 行，内容是"别信这个仓库"</td>
+<td>人类判决</td>
+<td><strong>唯一能落地的结论</strong></td>
+</tr>
+</tbody>
+</table>
+<p>结构层对、内容层对、结论只有第三层给得出。<strong>内容扫描的 <code>CLEAN</code> 语义是"本次规则集没看到"，不是"安全"。</strong> 一个 0 文件的项目、一个只有 README 的项目、一个把 payload 全写在 README 里的项目，都会得到 <code>CLEAN</code>。</p>
+<hr />
+<h2>四、退出码语义：把"没输入"和"输入干净"分开</h2>
+<p>这类工具最容易犯的错是让空集合满足全称命题——扫了 0 个文件，"没有发现问题"自动成立，于是 exit 0、全绿、可以合并。两个工具都把零输入做成独立的非成功状态：</p>
+<p><code>supply_audit.py</code>：</p>
+<table>
+<thead>
+<tr>
+<th>码</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>干净（只有 LOW 或无命中）——<strong>不等于安全证明</strong></td>
+</tr>
+<tr>
+<td>2</td>
+<td>只命中 MEDIUM，需人看一眼</td>
+</tr>
+<tr>
+<td>3</td>
+<td>命中 HIGH，默认拒绝安装，除非逐条解释</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>零输入 / 路径不可读 / 归档里没有可扫文件</strong> ← 「没输入」不是「输入干净」</td>
+</tr>
+<tr>
+<td>5</td>
+<td>selftest 失败</td>
+</tr>
+</tbody>
+</table>
+<p><code>repo_forensics.py</code>：<code>0 无可疑 / 2 有 NEEDS_EYES / 3 有 FARM_SUSPECT / 4 零输入 / 5 selftest 失败</code>。</p>
+<p>两个都自带自检，读数当场跑：<strong><code>supply_audit selftest</code> 20/20 通过</strong>（含"干净样本假阳性=0"、"tar.gz 不解包扫描结果与目录扫描一致 19=19"、"归档扫描期间未释放 payload 到磁盘"、"下载不完整的归档 → exit 4 而不是崩溃也不是全绿"），<strong><code>repo_forensics selftest</code> 11/11 通过</strong>（含"缺一半信号 → NEEDS_EYES 而不是直接判农场"、"watch 数少于阈值不判 BURST"、"events 缺失记 UNKNOWN 不假装测过"、"同输入两次判定一致"）。</p>
+<h3>今天踩到的一个小坑</h3>
+<p><code>--quiet</code> 会<strong>同时</strong>抑制 <code>--json</code> 落盘（源码里是 <code>if args.json_out and not args.quiet</code>）。我第一遍加 <code>--quiet</code> 跑，屏幕上结论是 <code>REJECT_REVIEW</code>，回头找 <code>out.json</code> 却没有——<strong>安静模式连审计证据一起安静掉了</strong>。在 CI 或发布流水线里想留证据，就不能用 <code>--quiet</code>。这不是 bug，但它是个默认值陷阱：<strong>能出结论不等于留了证据。</strong></p>
+<hr />
+<h2>五、装之前的 12 项检查（按顺序，越靠前越便宜）</h2>
+<ol>
+<li>星数只当发现面，<strong>不当判据</strong>；先看 <code>fork/star</code>——fork 是二次使用，star 是点赞。</li>
+<li>看 <code>created_at</code> → 第一次 push 的间隔：几分钟内推完的，是搬运不是长出来的。</li>
+<li>看体积：几十 KB 号称完整工程，先去读它到底装了什么。</li>
+<li>看有没有 LICENSE。无 license ≠ 恶意，但意味着<strong>你没有使用授权</strong>，企业环境直接卡死。</li>
+<li>拉 <code>/events</code> 看 WatchEvent 到达形态；events 缺失就记 UNKNOWN，不要用"没发现异常"替代。</li>
+<li>下载归档（<code>codeload.github.com/&lt;owner&gt;/&lt;repo&gt;/tar.gz/refs/heads/main</code>），<strong>先扫再解包</strong>，别 <code>git clone &amp;&amp; cd &amp;&amp; ./install.sh</code>。</li>
+<li>定位安装面：<code>install.sh</code> / <code>setup.py</code> / <code>Makefile</code> / <code>package.json</code> 的 <code>pre|post|install</code> / <code>.pth</code> / <code>sitecustomize.py</code>。这几个文件里的每一条命中都独立成立。</li>
+<li>命中要按落点分类，不是按条数排序：<strong>安装即执行 &gt; 导入即执行 &gt; 需调用 &gt; 仅文档</strong>。</li>
+<li>搜索"import 期副作用"：顶层代码里的网络请求、文件写入、<code>exec/eval</code>。</li>
+<li>可执行/二进制文件（<code>.node/.dll/.so/.jar</code>）出现即 HIGH，无源码可读的一律不进生产。</li>
+<li>读 README 全文。今天最值钱的结论就来自那 6 行——规则扫不出来，因为它不是代码。</li>
+<li>装完留证据：用 <code>--json</code> 存一份扫描结果（别加 <code>--quiet</code>），出问题时拿同一份输入复算，而不是靠回忆"当时好像扫过"。</li>
+</ol>
+<hr />
+<h2>六、边界声明</h2>
+<ul>
+<li>本文所有数字均为 <strong>2026-10-21 上午本机实跑</strong>（Windows 11 + git-bash + Python 3.13/3.14，GitHub API 由 <code>gh</code> CLI 调用）。星数、fork 数、体积、首发延迟<strong>每一分钟都在变</strong>，表里的值只能证明"当时是这样"，不能当常量引用；结论是"要这样测"，不是"这几个仓库有问题"。</li>
+<li><code>supply_audit.py</code> 是<strong>静态字符串规则</strong>，不解析 AST、不做数据流分析、不执行代码。它能看见语法层面的模式，看不见语义层面的意图：<strong>它能告诉你"这里有一条 <code>curl | sh</code>"，不能告诉你"这条是无害的示例还是真的后门"。</strong> 命中是线索，可复核的证据行才是产物。</li>
+<li>归档模式不落盘解包，避免"审计动作本身执行了 payload"；但扫描器本身用 <code>tarfile/zipfile</code> 读归档，<strong>对恶意构造的归档不做防护</strong>（如归档炸弹）——超过 2MB 的单文件只记大小不扫内容。</li>
+<li><code>repo_forensics.py</code> 的阈值是<strong>从真实样本上校准的启发式</strong>，不是硬件事实；<code>FARM_SUSPECT</code> 是"把人叫过来看"的触发器，不是"判定为恶意"。真正的判定必须看内容（第二层）加人读（第三层）。</li>
+<li>两个工具都只覆盖"这个包/这个仓库"，不覆盖模型行为：包干净不等于 agent 用它的方式干净。</li>
+</ul>
+<h3>复现材料</h3>
+<ul>
+<li><code>tools/supplyaudit/repo_forensics.py</code> —— 结构取证器（<code>analyze</code> / <code>selftest</code>，11 项自检，纯标准库，离线可复算）</li>
+<li><code>tools/supplyaudit/supply_audit.py</code> —— 内容静态审计器（<code>list-rules</code> / <code>scan</code> / <code>selftest</code>，15 条规则，20 项自检，零依赖，支持 tar.gz/zip 不解包）</li>
+<li><code>tools/supplyaudit/samples/repos_20261021.json</code> —— 今天这轮的 GitHub 原始回包（30 个仓库）</li>
+<li><code>tools/supplyaudit/samples/events20261021/</code> —— 对应的 30 份 events 回包（1.2MB，为了上面那张读表可逐格复算）</li>
+<li><code>tools/supplyaudit/samples/forensics_20261014.json</code> / <code>forensics_20261014.txt</code> / <code>repos_20261014.json</code> —— 10-14 那轮的对照样本（<code>NEEDS_EYES=7, ORGANIC=23</code>）。<strong>这一组不附 events 回包（原目录 4.8MB）</strong>，因为实测下来不带 events 重跑判定 0 处变化（见上一节的对照实验），形态字段会记为 <code>UNKNOWN</code> 而不是猜一个值</li>
+<li><code>tools/supplyaudit/out_f20261021.json</code> —— 本文读表的原始判定（含每条 reason 与全部中间读数）</li>
+</ul>
+<p>一条命令跑完第一层：</p>
+<pre><code class="language-bash">python repo_forensics.py analyze --repos samples/repos_20261021.json \
+  --events-dir samples/events20261021/ --json /tmp/f.json
+</code></pre>
+<p>一条命令跑完第二层（把 URL 换成你要装的那个）：</p>
+<pre><code class="language-bash">curl -sL -o pkg.tar.gz https://codeload.github.com/&lt;owner&gt;/&lt;repo&gt;/tar.gz/refs/heads/main
+python supply_audit.py scan pkg.tar.gz --json pkg_audit.json
+</code></pre>
+<p><strong>先看落点，再看条数；先读 README，再信星数。</strong></p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
