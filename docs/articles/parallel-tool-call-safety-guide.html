@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>同一个追加写，Linux 丢 0 条、Windows 丢 309 条：并行工具调用里什么能并、什么必须排队</title>
+    <meta name="description" content="并行工具调用的三层判据与全程实测（数字均为本机原样输出）：①并行到底能省多少——四类负载同一并发度差 10 倍以上：24 个 3MB 文件 sha256 串行 0.658s，P4 0.416s/P8 0.413s/P24 0.420s 封顶 1.59x；20 次进程启动 0.400s→P4 0.039s（10.4x）；12 次纯等待 3.004s→P4 0.753s(3.99x)/P12 0.252s(11.94x)；12 次真 HTTP 11.521s→P4 0.642s(17.96x) 但 P12 掉到 0.886s(13.00x)。并给出「加速比 19.53x 超过并发度 4」的假象来源：串行基线里含每次约 0.4s 的进程开销，纯线程复测立刻回到 3.99x——加速比衡量的是固定开销占比，不是并发能力。②写为什么必须排队：8 写者×10 轮的读改写丢 87%（期望 80 实得 10/11/10）；追加写也丢（18/29/24）。2×2 实测定位变量：屏障同步+每条重开丢 67/240、屏障同步+单 fd 只活 15/15/16 条（丢 194/240）、错峰启动两格全 0；同一脚本在 WSL Ubuntu 四格全 0/240——Windows 261 条 vs Linux 0 条，得出「Windows 的 O_APPEND 是打开时取位置、不是每次 write 原子」，并说明错峰不丢只是时序没重叠的运气（probe 复跑读到 0 条与 20 条两种结果）。③三层判据分离（声明的 plan / 实际的 ledger / 底层的 probe）与各自单独使用的失效方式。④真实 9 任务文档站刷新 spec：9 调用→5 批、最大宽度 4、理论加速仅 1.73x（受最长串行链 sitemap→commit→push 限制，调大 max_parallel 无效）。⑤分批器第一版真实 bug：贪心只查冲突不查方向，把 render_sitemap 排到其生产者 build_index 之前（输出自洽、accounting_ok 为真），修法=批号必须大于所有冲突前置 job 的批号，批数 3→5、加速 2.69x→1.73x，并补 5 条方向断言。⑥批内失败无回滚实测（[T,F,T,T,T] → 落地 4 个文件、rolled_back 为空），批边界是唯一恢复点。⑦ledger 对账抓到的那一对正是丢掉更新的那一对（并发 final_n=5 丢 3 → RACE 检出 w7×w6 重叠 0.0150s；串行 8/0 → NO_OVERLAP），含读读重叠不算竞态、边界相接不算重叠两条判定。⑧工具 tools/parbatch/par_batch.py（plan/ledger/probe/selftest，纯标准库，44 项自检，退出码 0/2/3/5）+ make_ledger_samples.py 现场生成真实 ledger。含一页并行规则表与边界声明（plan 只知道你声明的效果、贪心非最优、probe 只测 append 语义、毫秒数为本机一次实测）。">
+    <meta name="keywords" content="并行工具调用,并发安全,丢失更新,lost update,读改写,WW冲突,RW冲突,exclusive冲突,文件锁,O_APPEND,append原子性,Windows文件并发,Windows丢数据,Linux原子追加,WSL对照,跨平台差异,竞态检测,race detector,ledger对账,声明与实际,原子性探测,分批,分批执行,批边界,回滚,部分失败,依赖排序,贪心着色,生产者消费者顺序,串行链,理论加速上限,max_parallel,并发度,进程启动开销,HTTP并发,P12更慢,AI Agent工程,自动化正确性,Python标准库,selftest,退出码门禁">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/parallel-tool-call-safety-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>同一个追加写，Linux 丢 0 条、Windows 丢 309 条：并行工具调用里什么能并、什么必须排队</h1>
+<p>Agent 一晚上要跑几十个工具调用，所有人都知道「能并行就并行」。但几乎没有人检查过：<strong>这两条调用是不是在碰同一个文件。</strong></p>
+<p>这一篇的全部数字来自本机今天的三组实测。它们拼起来说明一件事——并行是三个不同的问题，混在一起就一定出错：</p>
+<ol>
+<li><strong>声明层</strong>：我以为哪个调用读什么、写什么。→ 决定「能不能同批」。</li>
+<li><strong>实际层</strong>：这次运行里，每次调用真正占用的时间区间。→ 决定「有没有撞上」。</li>
+<li><strong>底层层</strong>：当前 OS 和文件系统上，<code>open(O_APPEND)</code> 到底是原子的，还是只是「打开时取了个位置」。→ 决定「撞上之后会不会丢数据」。</li>
+</ol>
+<p>第 3 层不是理论问题。<strong>同一段 Python、同一个追加写、同样的 8 写者 × 10 条记录，WSL 的 Linux 丢 0/960，Windows 丢 309/960。</strong> 而第 1 层和第 2 层的检查在两台机器上都通过了。</p>
+<p>工具在 <a href="https://github.com/Felixwang007/awesome-content-tools/blob/main/tools/parbatch/par_batch.py"><code>tools/parbatch/par_batch.py</code></a>（纯标准库，<code>selftest</code> 44/44，三个子命令分开做三层判定）。</p>
+<hr />
+<h2>1. 先问：并行到底能省多少</h2>
+<p>我用四种性质的负载各做了一轮实测。<strong>同一个并行度，加速比可以差 10 倍以上</strong>，所以「并行要开多大」不是一个可以拍脑袋的问题。</p>
+<table>
+<thead>
+<tr>
+<th>负载</th>
+<th>串行</th>
+<th>并行</th>
+<th>加速比</th>
+<th>上限由什么决定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>24 个 3MB 文件 <code>sha256sum</code>（CPU+磁盘）</td>
+<td>0.658s</td>
+<td>P2 0.513s / P4 0.416s / P8 <strong>0.413s</strong> / P24 0.420s</td>
+<td><strong>1.59x 封顶</strong></td>
+<td>磁盘吞吐 + 核数</td>
+</tr>
+<tr>
+<td>20 次进程启动（<code>true</code>）</td>
+<td>0.400s（20ms/次）</td>
+<td>P4 0.039s / P8 0.038s / P20 0.038s</td>
+<td><strong>10.4x</strong></td>
+<td>启动固定开销</td>
+</tr>
+<tr>
+<td>12 次纯等待（0.25s <code>sleep</code>，线程）</td>
+<td>3.004s</td>
+<td>P4 0.753s / P12 0.252s</td>
+<td><strong>3.99x / 11.94x</strong></td>
+<td>并发度本身（=理论上限）</td>
+</tr>
+<tr>
+<td>12 次真 HTTP 请求（Pages CDN）</td>
+<td>11.521s（960ms/次）</td>
+<td>P4 <strong>0.642s（17.96x）</strong> / P12 0.886s（13.00x）</td>
+<td>4~18x，<strong>P12 反而更慢</strong></td>
+<td>服务端/连接池，不是我的并发度</td>
+</tr>
+</tbody>
+</table>
+<p>三行读数里各有一个坑：</p>
+<p><strong>第一行：加并发不等于变快。</strong> <code>sha256sum</code> 是计算密集 + 磁盘读取，P2 拿到 1.28x，P4 到 1.58x，再往上加并行度<strong>完全不动</strong>（0.416 → 0.413 → 0.420）。这时候把 <code>max_parallel</code> 从 4 调到 24，只是让 24 个进程抢同一块盘。<strong>判断依据是「再加并发还动不动」，不是「还能不能更快」。</strong></p>
+<p><strong>第二行：加速比可以超过并发度。</strong> 12 次 0.25s 的等待，串行却花了 <strong>7.989s</strong>，而不是 3.0s；于是 P4 的加速比算出来是 <strong>19.53x</strong>——物理上不可能。</p>
+<p>原因不在并行，在基线：那次串行用的是 <code>bash -c 'sleep 0.25'</code>，每次调用除了实际的 0.25s，还有约 0.4s 的进程创建/回收开销，串行把 12 次开销全付了一遍。换成纯线程（无进程启动），同一个实验立刻给出 <strong>3.99x / 11.94x</strong>，与并发度严丝合缝。</p>
+<p>所以那条 19.5x 是<strong>度量出来的假象</strong>，而它指向一个真事实：</p>
+<blockquote>
+<p><strong>并行加速比 = (固定开销 + 实际工作量) ÷ (固定开销/并发度 + 实际工作量)。</strong><br />
+加速比超过并发度，只能说明串行基线里塞了大量固定开销——它衡量的是开销占比，不是并发能力。</p>
+</blockquote>
+<p><strong>第三行：更多的并发会更慢。</strong> 12 个请求 P4 用 0.642s，P12 用 0.886s。同一个 CDN、同一台机器，翻三倍并发反而慢 38%。这就是「并行度不是越大越好」的实证：到某个点之后，你排的是队列。</p>
+<hr />
+<h2>2. 写为什么必须排队：一次 2×2 实测</h2>
+<p>读可以并行，因为读不改状态。写不行，因为两个写者对同一路径做「读—改—写」，后一个会拿着前一个之前读到的值覆盖回去。</p>
+<p>先看最朴素的形式（8 个进程各把 <code>counter.txt</code> 加 1 十次，期望 80）：</p>
+<pre><code>{&quot;mode&quot;: &quot;counter&quot;, &quot;writers&quot;: 8, &quot;rounds&quot;: 10, &quot;expect&quot;: 80, &quot;got&quot;: 10, &quot;lost&quot;: 70, &quot;wall_s&quot;: 0.214}
+{&quot;mode&quot;: &quot;counter&quot;, &quot;writers&quot;: 8, &quot;rounds&quot;: 10, &quot;expect&quot;: 80, &quot;got&quot;: 11, &quot;lost&quot;: 69, &quot;wall_s&quot;: 0.223}
+{&quot;mode&quot;: &quot;counter&quot;, &quot;writers&quot;: 8, &quot;rounds&quot;: 10, &quot;expect&quot;: 80, &quot;got&quot;: 10, &quot;lost&quot;: 70, &quot;wall_s&quot;: 0.219}
+</code></pre>
+<p>丢了 87%，三次运行都一样。这个不奇怪。奇怪的是<strong>追加写也丢</strong>：</p>
+<pre><code>{&quot;mode&quot;: &quot;append&quot;, &quot;expect&quot;: 80, &quot;got&quot;: 62, &quot;lost&quot;: 18}
+{&quot;mode&quot;: &quot;append&quot;, &quot;expect&quot;: 80, &quot;got&quot;: 51, &quot;lost&quot;: 29}
+{&quot;mode&quot;: &quot;append&quot;, &quot;expect&quot;: 80, &quot;got&quot;: 56, &quot;lost&quot;: 24}
+</code></pre>
+<p>追加写按定义不该丢记录——每次都往文件末尾放一行，谁也不覆盖谁。为了搞清是哪个变量在起作用，我做了一个 2×2：<strong>是否用屏障让 8 个写者同时开跑</strong> × <strong>是否每条记录重新 open 一次</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>组合</th>
+<th>Windows 三次读数（期望 80）</th>
+<th>丢失合计 /240</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>屏障同步 + 每条重开</td>
+<td>60 / 55 / 58</td>
+<td><strong>67</strong></td>
+</tr>
+<tr>
+<td>屏障同步 + 只开一次 fd</td>
+<td><strong>15 / 15 / 16</strong></td>
+<td><strong>194</strong></td>
+</tr>
+<tr>
+<td>错峰启动 + 每条重开</td>
+<td>80 / 80 / 80</td>
+<td>0</td>
+</tr>
+<tr>
+<td>错峰启动 + 只开一次 fd</td>
+<td>80 / 80 / 80</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<p>然后同一份脚本、同一个 2×2，放进 WSL 的 Ubuntu 跑：</p>
+<table>
+<thead>
+<tr>
+<th>组合</th>
+<th>Linux 三次读数（期望 80）</th>
+<th>丢失合计 /240</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>屏障同步 + 每条重开</td>
+<td>80 / 80 / 80</td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td>屏障同步 + 只开一次 fd</td>
+<td>80 / 80 / 80</td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td>错峰启动 + 每条重开</td>
+<td>80 / 80 / 80</td>
+<td><strong>0</strong></td>
+</tr>
+<tr>
+<td>错峰启动 + 只开一次 fd</td>
+<td>80 / 80 / 80</td>
+<td><strong>0</strong></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Windows 两格合计丢 261 条，Linux 四格合计丢 0 条。同一段代码。</strong></p>
+<p>最能说明问题的是 Windows 那格「同步 + 只开一次 fd」：<strong>80 条记录里只活下来 15 条</strong>。如果 <code>O_APPEND</code> 的语义是「每次 write 都原子地落到当前文件末尾」，这个格子不可能出现。它只可能是另一种语义：</p>
+<blockquote>
+<p><strong><code>open(O_APPEND)</code> 在 Windows 上取到的是一个「打开那一刻的文件末尾位置」，后续 write 落在这个位置上，每写一条位置就自己加一。8 个进程几乎同时打开，就几乎同时拿到了同一个位置——于是 8 条流互相覆盖在同一个偏移上，最终长度约等于「一个写者的 10 条 + 交错残片」。</strong></p>
+</blockquote>
+<p>这解释了为什么「错峰启动」两格是满的：进程启动时间差几十毫秒，8 个写者的写入窗口根本不重叠，所以取到哪个位置都无所谓。<strong>在这个实验里，正确性的来源不是 API 的原子性，而是时序恰好没重叠。</strong> 这类缺陷在任何单次测试里都会显示「通过」。</p>
+<p>再补一条：<code>probe</code> 子命令重复跑这一套时，「错峰启动」两格也不是恒为零——某次读到 <code>3</code> 和 <code>20</code> 条丢失。所以准确说法是：</p>
+<blockquote>
+<p>Linux 上 append 是<strong>每次 write 原子</strong>（四格全 0）；Windows 上 append 是<strong>打开时取位置</strong>——突发并发必丢（67/194），错峰时<strong>通常</strong>不丢但<strong>不保证</strong>（实测 0 条和 20 条都出现过）。</p>
+</blockquote>
+<p>对一个写审计日志、写台账、写 <code>state.json</code> 的 Agent 来说，这两句话的差别就是「日志可信」和「日志有时少几条，而你永远不会知道少了哪几条」。</p>
+<p>一条命令就能在你自己的机器上得到这个结论：</p>
+<pre><code>python tools/parbatch/par_batch.py probe
+# Windows: &quot;verdict&quot;: &quot;NOT_ATOMIC_UNDER_BURST&quot;, &quot;lost_total&quot;: 309, &quot;burst_lost&quot;: 286
+# WSL Linux 跑同一个文件: &quot;verdict&quot;: &quot;ATOMIC&quot;, &quot;lost_total&quot;: 0
+</code></pre>
+<p>退出码 <code>2</code> 表示「本机底层语义不允许并发追加」，<code>0</code> 表示四格全 0。</p>
+<hr />
+<h2>3. 三层判据必须分开，因为它们的失效方式不同</h2>
+<p>这就是我把工具拆成三个子命令的原因：</p>
+<table>
+<thead>
+<tr>
+<th>子命令</th>
+<th>看的是</th>
+<th>通过意味着</th>
+<th>单独使用会错在哪</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plan --spec</code></td>
+<td><strong>声明</strong>的 reads/writes/exclusive</td>
+<td>我以为的并发是安全的</td>
+<td>声明漏了一个写，计划完美通过</td>
+</tr>
+<tr>
+<td><code>ledger --file</code></td>
+<td><strong>实际</strong>运行的 start/end 区间</td>
+<td>这次运行没有重叠写</td>
+<td>这次没撞上是运气，不代表下次不撞</td>
+</tr>
+<tr>
+<td><code>probe</code></td>
+<td><strong>本机</strong>append/open 原子性</td>
+<td>底层允许/不允许并发写</td>
+<td>底层安全也可能因为逻辑错误丢数据（如丢失更新）</td>
+</tr>
+</tbody>
+</table>
+<p><code>plan</code> 的输入是一份纯声明，工具不执行任何命令：</p>
+<pre><code class="language-json">{&quot;id&quot;: &quot;build_index&quot;, &quot;reads&quot;: [&quot;data/a.json&quot;,&quot;data/b.json&quot;,&quot;data/c.json&quot;],
+ &quot;writes&quot;: [&quot;index.html&quot;], &quot;est_s&quot;: 0.4}
+</code></pre>
+<p>冲突只有三类，每类对应一种确定会被搞坏的后果：</p>
+<ul>
+<li><strong>WW 同一路径被两个 job 写</strong> → 丢失更新（后写覆盖先写，且不报错）</li>
+<li><strong>RW 一个写、另一个读同一路径</strong> → 读到的是「之前」还是「之后」不确定</li>
+<li><strong>EX 两个 job 抢占同一全局资源</strong>（<code>cwd</code> / <code>env</code> / 端口 / git 仓库 / 限流的接口）→ 与路径无关的串行化需求</li>
+</ul>
+<p>仓库里带了一份真实的夜间文档站刷新任务（9 个调用）。跑出来是这样：</p>
+<pre><code>jobs=9  批数=5  最大宽度=4  cap=8  冲突对=10
+  批1 (宽度4): fetch_a fetch_b fetch_c notify
+  批2 (宽度2): build_index render_post
+  批3 (宽度1): render_sitemap
+  批4 (宽度1): commit
+  批5 (宽度1): push
+  估算：串行 7.80s → 分批 4.50s（加速 1.73x）
+  裁决：UNSAFE_AS_CLAIMED
+</code></pre>
+<p>值得看的是最后两行。9 个调用里只有前两批是真并行，尾巴上 <code>sitemap → commit → push</code> 三个必须一个一个来。<strong>所以理论上限只有 1.73 倍，而不是 9 个任务能想象的 4 倍。并行收益由最长的串行链决定，不由最大的批宽度决定。</strong> 想再快就得改设计（比如让 commit/push 挪出这个批次），调 <code>max_parallel</code> 一点用都没有。</p>
+<p><code>UNSAFE_AS_CLAIMED</code> 的意思是：spec 里写了 <code>claims_parallel: true</code>（我打算一次全提交），但按声明必须分成 5 批。此时 exit code 是 <code>2</code>——<strong>声明与事实不一致要能被 CI 抓住，而不是靠人看输出。</strong></p>
+<hr />
+<h2>4. 分批器第一版把消费者排到了生产者前面</h2>
+<p>这是今天最值得记的一段，因为它的输出看起来完全合法。</p>
+<p>第一版的贪心是「把 job 放进第一个装得下它的批」。对那份 9 任务的 spec，它给出：</p>
+<pre><code>批1 (宽度6): fetch_a fetch_b fetch_c render_sitemap push notify
+批2 (宽度2): build_index render_post
+批3 (宽度1): commit
+</code></pre>
+<p><code>render_sitemap</code> 被排进了<strong>第 1 批</strong>，而它读的 <code>index.html</code> 要到<strong>第 2 批</strong>才由 <code>build_index</code> 产出。批是按序号顺序执行的，所以这个计划让 sitemap 用上一轮的旧 index 生成——不报错、不冲突、<code>accounting_ok</code> 为真，每一行都自洽。</p>
+<p>原因是贪心只看「这批判装不装得下 + 有没有冲突」，从来没看<strong>方向</strong>：<code>render_sitemap</code> 和 <code>build_index</code> 确实冲突（RW <code>index.html</code>），但冲突只是让它俩不同批，没规定谁先谁后。而当 <code>render_sitemap</code> 被评估时，<code>build_index</code> 还没落进任何批，所以「不早于它」这个约束根本不存在。</p>
+<p>修法是一条约束：</p>
+<blockquote>
+<p>批号是执行顺序，所以一个 job 只能落在「比它冲突过的<strong>所有前置 job</strong> 的批号都大」的批里。</p>
+</blockquote>
+<p>改完之后批数从 3 变成 5，估算加速比从 2.69x 掉到 1.73x——<strong>数字变难看了，但它是对的</strong>。我把它写成 5 条自检断言钉住：链式依赖批号严格递增、读者晚于其写者、无关的写者仍能同批、宽批不被依赖约束拆碎、分批结果确定可复现。</p>
+<p>顺带一条通则：<strong>冲突检测（会不会撞）和依赖排序（谁先谁后）是两个断言，一个通过不能代替另一个。</strong> 只要有「按批序号执行」的设计，就必须单独验证方向。</p>
+<hr />
+<h2>5. 一个批失败到一半，没有回滚</h2>
+<p>这是「批量」这个抽象自带的性质，不是实现的 bug。同一个批里 5 个写操作，第 2 个失败：</p>
+<pre><code class="language-json">{&quot;batch&quot;: [true, false, true, true, true],
+ &quot;landed&quot;: [1, 3, 4, 5], &quot;rolled_back&quot;: [],
+ &quot;note&quot;: &quot;失败发生在第2项时第3-5项仍会执行(continue)或全部中止(fail-fast)，两种都不会回到0&quot;,
+ &quot;files_on_disk&quot;: [&quot;w1.txt&quot;, &quot;w3.txt&quot;, &quot;w4.txt&quot;, &quot;w5.txt&quot;]}
+</code></pre>
+<p><code>continue</code> 和 <code>fail-fast</code> 都不回滚——一个是「做了 4 件」，一个是「做了 1 件但第 3~5 件被跳过」，<strong>没有任何一种会回到 0 件</strong>。所以批的语义是：</p>
+<ul>
+<li><strong>批内</strong>：要么全做、要么做一部分，取决于失败处理策略，你得自己选</li>
+<li><strong>跨批</strong>：前一批已完成，后一批还没开始——<strong>批边界才是你唯一的恢复点</strong></li>
+</ul>
+<p>这就是为什么 <code>plan</code> 输出的不是一个平坦列表，而是有序的批：<strong>批号就是断点号</strong>。cron 里重跑时从「最后一个完整批」继续，比从「最后一个成功调用」继续更容易说清楚状态。</p>
+<p>另外 <code>plan_report</code> 里那个 <code>accounting_ok</code> 字段值得单说：它断言「每个 job 在分批中恰好出现一次」。第一版分空批的实现里曾经静默吞掉一个 job（表现为 <code>max_width</code> 正常、批数正常、总数少 1）。<strong>任何分批/分桶/分组，都必须有一个守恒核对行，否则漏掉一行是看不出来的。</strong></p>
+<hr />
+<h2>6. <code>ledger</code> 拿真实运行对账：抓到的那一对，正是丢了数据的那一对</h2>
+<p>声明层通过了，实际层还要验。我让 8 个写者并发读改写同一个 <code>state.json</code>，每个写者记录自己的 <code>start/end</code> 单调时钟：</p>
+<pre><code>python tools/parbatch/make_ledger_samples.py
+{&quot;mode&quot;: &quot;parallel&quot;, &quot;writers&quot;: 8, &quot;expected_n&quot;: 8, &quot;final_n&quot;: 5, &quot;lost&quot;: 3,
+ &quot;records&quot;: 8, &quot;overlapping_pairs&quot;: 1, &quot;wall_s&quot;: 0.155}
+{&quot;mode&quot;: &quot;serial&quot;,   &quot;writers&quot;: 8, &quot;expected_n&quot;: 8, &quot;final_n&quot;: 8, &quot;lost&quot;: 0,
+ &quot;records&quot;: 8, &quot;overlapping_pairs&quot;: 0, &quot;wall_s&quot;: 0.605}
+</code></pre>
+<p>并发版最终计数是 <strong>5</strong>（期望 8，丢 3）；串行版是 8、0 丢失。两份 ledger 分别喂给对账：</p>
+<pre><code>$ par_batch.py ledger --file samples/ledger_parallel.jsonl
+记录=8  检查的写相关对=28  竞态=1  → RACE
+  state.json: w7 × w6 (write/write) 重叠 0.0150s
+exit=2
+
+$ par_batch.py ledger --file samples/ledger_serial.jsonl
+记录=8  检查的写相关对=28  竞态=0  → NO_OVERLAP
+exit=0
+</code></pre>
+<p>关键不是「检出 1 对」，而是<strong>检出的这一对（w7 × w6）确实是丢掉更新的那一对</strong>——探测器的结论与实际损失一致，这才叫对账。两个判定细节：</p>
+<ul>
+<li><strong>读读重叠不算竞态</strong>，哪怕区间完全重合。8 个读并排跑是该鼓励的事。</li>
+<li><strong>边界相接（<code>a.end == b.start</code>）不算重叠。</strong> 先结束、再开始是顺序执行。把它算成重叠，会让所有串行批次都报 RACE，工具从此没人看。</li>
+</ul>
+<hr />
+<h2>7. 一页规则：什么能并行</h2>
+<table>
+<thead>
+<tr>
+<th>调用性质</th>
+<th>能并行吗</th>
+<th>依据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>不同路径的读（hash、grep、读配置）</td>
+<td>✅ 能</td>
+<td>无共享可变状态</td>
+</tr>
+<tr>
+<td>同一路径的多个读</td>
+<td>✅ 能</td>
+<td>读不改状态</td>
+</tr>
+<tr>
+<td>不同路径的写</td>
+<td>⚠️ 能，但收益常低于预期</td>
+<td>磁盘/服务端会饱和（实测 1.59x 封顶）</td>
+</tr>
+<tr>
+<td><strong>同一路径的写</strong></td>
+<td>❌ <strong>必须排队</strong></td>
+<td>丢失更新，静默（实测丢 87%）</td>
+</tr>
+<tr>
+<td>一个写 + 一个读同一路径</td>
+<td>❌ 必须排队</td>
+<td>读到之前还是之后不确定</td>
+</tr>
+<tr>
+<td>共享全局资源（cwd/env/端口/git 仓库/限流接口）</td>
+<td>❌ 必须排队</td>
+<td>与路径无关的 EX 冲突</td>
+</tr>
+<tr>
+<td>进程启动本身</td>
+<td>✅ 收益巨大</td>
+<td>固定开销在并行下重叠（实测 10.4x）</td>
+</tr>
+<tr>
+<td>网络请求</td>
+<td>✅ 但要看服务端</td>
+<td>P4 17.96x，P12 掉到 13.00x</td>
+</tr>
+<tr>
+<td>追加写日志（以为安全）</td>
+<td>⚠️ <strong>看平台</strong></td>
+<td>Windows 突发必丢（261/480），Linux 原子</td>
+</tr>
+</tbody>
+</table>
+<p>最后一行是这一篇最想让人记住的一条：<strong>「追加写是安全的」这句话没有平台限定就是错的。</strong></p>
+<hr />
+<h2>8. 用法</h2>
+<pre><code class="language-bash">python tools/parbatch/par_batch.py selftest                    # 44 项断言，不联网不写盘
+python tools/parbatch/par_batch.py plan --spec samples/spec_docs_refresh.json
+python tools/parbatch/par_batch.py plan --spec x.json --claims-parallel   # 声明与事实不符则 exit 2
+python tools/parbatch/par_batch.py ledger --file samples/ledger_parallel.jsonl
+python tools/parbatch/par_batch.py probe --workers 8 --rounds 10 --trials 3
+python tools/parbatch/make_ledger_samples.py                   # 重新生成两份真实 ledger
+</code></pre>
+<p>退出码：<code>0</code> 干净 / <code>2</code> 检出冲突或竞态或底层非原子 / <code>3</code> 用法错误或零输入 / <code>5</code> 自检失败。<br />
+<code>3</code> 和 <code>2</code> 分开是因为它们的处理方式完全不同：<code>3</code> 意味着「重读输入再跑」，<code>2</code> 意味着「你得去改计划或改代码」。</p>
+<p><code>plan</code> 只读声明文件、不执行任何命令；<code>probe</code> 会真的在临时目录里 spawn 8 个进程写文件（跑完删掉）。想审计别人的计划而不带副作用，用 <code>plan</code> 就够了。</p>
+<hr />
+<h2>9. 边界声明</h2>
+<ul>
+<li><strong><code>plan</code> 只知道你告诉它的东西。</strong> 一个 <code>git</code> 命令实际会写 <code>.git/index</code>、<code>.git/objects/*</code>、<code>logs/HEAD</code>；一个 <code>pip install</code> 会写几百个文件。声明漏了，计划就是错的，而且它会理直气壮地告诉你 SAFE。这是本工具最大的失效模式，我没有自动化办法——只能靠 <code>exclusive</code> 把「不可穷举的写」整体标记成独占。</li>
+<li><strong>贪心不是最优分批。</strong> 它保证确定性、保序、可解释，不保证批数最少。要最优就是图着色 / 列表调度，代价是结果不再显然可解释——对「计划要能被人复核」的场景，我选了前者。</li>
+<li><strong><code>probe</code> 只测 append 语义。</strong> 它不测 <code>rename</code> 原子性、不测 <code>flock</code>/<code>msvcrt.locking</code> 是否可用、不测网络文件系统（SMB/NFS 上结论可能完全不同）。它测的是「我这一台的这一个临时目录」，别的地方要重跑。</li>
+<li><strong><code>ledger</code> 需要你的运行真的记录了时间戳。</strong> 事后拿不到 <code>start/end</code>，就只能靠 <code>plan</code> 猜。</li>
+<li><strong>所有毫秒数都是本机一次实测。</strong> 可复现的是方法与判据（三层分离、四类冲突、方向约束、守恒核对），不是那些具体数字。</li>
+<li>不处理：跨机器的分布式锁、事务性文件写入、批内自动重试（重试会重新触发同一个 WW 冲突，且你没有幂等键——那是另一个话题）。</li>
+</ul>
+<p>一句话收尾：<strong>并行不是「一起发出去」，是「先证明它们不共享任何可变状态，再一起发出去」。</strong> 前一句是速度，后一句才是正确性——而丢数据的那个版本，跑得更快。</p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>

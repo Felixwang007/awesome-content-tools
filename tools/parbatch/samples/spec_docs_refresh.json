@@ -1,0 +1,15 @@
+{
+  "note": "一份真实的夜间文档站刷新任务：9 个调用，声明每个调用的读集/写集/独占资源。par_batch.py plan 只读这个文件，不执行任何命令。",
+  "claims_parallel": true,
+  "jobs": [
+    {"id": "fetch_a",     "reads": [],                                  "writes": ["data/a.json"], "est_s": 1.2},
+    {"id": "fetch_b",     "reads": [],                                  "writes": ["data/b.json"], "est_s": 1.4},
+    {"id": "fetch_c",     "reads": [],                                  "writes": ["data/c.json"], "est_s": 0.9},
+    {"id": "build_index", "reads": ["data/a.json","data/b.json","data/c.json"], "writes": ["index.html"], "est_s": 0.4},
+    {"id": "render_post", "reads": ["data/a.json"],                      "writes": ["articles/a.html"], "est_s": 0.6},
+    {"id": "render_sitemap", "reads": ["index.html","articles/a.html"],  "writes": ["sitemap.xml"], "est_s": 0.2},
+    {"id": "commit",      "reads": ["index.html","articles/a.html","sitemap.xml"], "writes": [".git/index"], "exclusive": ["git"], "est_s": 0.3},
+    {"id": "push",        "reads": [".git/index"],                       "writes": [],  "exclusive": ["git"], "est_s": 2.0},
+    {"id": "notify",      "reads": [],                                   "writes": ["notify.log"], "exclusive": ["chat_api:rate_limited"], "est_s": 0.8}
+  ]
+}
