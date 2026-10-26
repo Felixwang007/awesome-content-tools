@@ -1,0 +1,18 @@
+{
+  "_note": "真实快照：同一仓库改成 per_page=100，12 次抓取里只有 1 次拿到完整 body（634,981 字节、100 条），其余 11 次都是 IncompleteRead。这就是那唯一一次「成功」的响应。",
+  "kind": "http",
+  "request": {
+    "url": "https://api.github.com/repos/torvalds/linux/commits?per_page=100",
+    "limit": 100,
+    "offset": 0
+  },
+  "response": {
+    "status": 200,
+    "parse": "ok",
+    "items": 100,
+    "bytes_read": 634981,
+    "headers": {
+      "link": "<https://api.github.com/repositories/2325298/commits?per_page=100&page=2>; rel=\"next\", <https://api.github.com/repositories/2325298/commits?per_page=100&page=1102337>; rel=\"last\""
+    }
+  }
+}

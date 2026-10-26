@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>翻到空页不等于读完了：533,692 条里拿到 1,000 条，服务端在你越过上限之后把「总量」也改成了 0</title>
+    <meta name="description" content="Agent「读到」与「读完」之间隔着一个必须有人提供的数字（数字均为 2026-10-26 本机原样读数）。①四种「读了一半」只有一种会喊出声：好截断（读 465,000 字节/5,000 行文件返回 1,042 行，同时给 truncated_by=bytes + total_lines=5000 + next_offset=1043）、坏截断（GitHub commits per_page=1000：5/5 次 200+半截 body，IncompleteRead(49311 bytes, 16225 more expected)，49311+16225=65536 正好一个 64KiB 分块）、静默封顶（请求 limit=5000 实得 1000 且无 total/has_more/next/Link 任何总量字段）、假完整（翻到空页被当成读完）。②同一端点只改每页条数：per_page=1 一次成功、per_page=100 十八次只成功四次（22%）、per_page=1000 五次全半截——「接口不稳」多半是「一次要得太多」；且那唯一一次干净的 200（634,981 字节/100 条）自身带着 rel=next 指向第 1,102,337 页。③Algolia 现场：nbHits=533,689 但 hitsPerPage=5000 只给 1,000 条且 nbPages=1；hitsPerPage=100 翻到 page=9 正常（第 1,000 条），page=10 越过硬顶返回 200 + hits=0 + nbHits=0 + nbPages=0——行业默认的「空页即结束」循环会安静成功退出、拿到 1,000/533,692（0.19%）且没有任何字段与「已取全集」矛盾；三次读到的总量 533,688/533,689/533,692 分钟级漂移，故对账不能要求纯相等。④判定必须是三态而非两态：COMPLETE 需要正面证据（total==items / has_more=false / 结束标记 / 行数字节都对上），TRUNCATED 需要截断证据，UNKNOWN 是默认结局而非「应该没问题」。⑤八条规则 TR001-TR009 分三层（流层 Link/字节数、集合层 total/has_more/覆盖区间、语义层截断措辞/空页归因），其中 TR006「请求大于实得且实得命中常见上限且零总量字段」故意判 UNKNOWN 而不是 TRUNCATED——分不出来就别写成已确认。⑥工具 tools/trunc/trunc_probe.py（judge/selftest，纯标准库，25/25 自检，退出码 0 COMPLETE/2 TRUNCATED/3 UNKNOWN/4 零输入/5 自检失败）+ 六份快照（四份现场实测：Algolia、GitHub 两个、本地大文件；两份文件名里直说 constructed_ 的构造样本），六条判定输出逐字贴出。⑦四条落地硬规则：工具返回必须带总量三件套之一、UNKNOWN 不许写成产出、终止判据不能只看空页且要允许总量漂移、重试前先分类错误（200+parse fail=半截要降 page size，4xx=请求错，200+parse ok+零总量字段=去补证据）。含六条边界声明（快照是调用方提供的事实、不做语义判重、TR006 是怀疑不是结论、抖动时不判 COMPLETE 是故意的、续读点只是建议 Algolia 那条路径 1,000 就是硬顶、自检不覆盖网络行为）。">
+    <meta name="keywords" content="输出截断,truncation,分页,pagination,翻页,空页即结束,终止判据,total vs items,nbHits,nbPages,has_more,next_offset,Link rel=next,分块传输,chunked,IncompleteRead,半截正文,HTTP 200,parse fail,静默封顶,silent cap,limit 上限,数据完整性,全集证明,三态判定,COMPLETE TRUNCATED UNKNOWN,假绿灯,退出码门禁,selftest,GitHub API,Algolia,HN 搜索,大文件读取,read budget,续读点,resume,重试分类,错误分类,降 page size,AI Agent 工程,上下文截断,context truncation,RAG 取全,爬虫翻页,数据对账,零输入不是干净输入">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-output-truncation-detection-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>翻到空页不等于读完了：533,692 条里拿到 1,000 条，服务端在你越过上限之后把「总量」也改成了 0</h1>
+<p>Agent 每读一次东西都在做同一个隐含断言：<strong>「我看到的这些，就是它要给我的全部。」</strong></p>
+<p>这个断言几乎从来不成立，而且失败时有三种完全不同的样子——只有一种会喊出声。</p>
+<p>这一篇的每个数字都是今天在本机跑出来的，来源只有四处：一次读大文件、抓 GitHub 的 commits 接口、抓 HN Algolia 搜索、以及一个「服务端一声不响封顶」的构造样本。它们拼出来的是同一件事：</p>
+<blockquote>
+<p><strong>「没看到 truncated」不是全集证明。全集需要正面证据。</strong></p>
+</blockquote>
+<p>工具在 <a href="https://github.com/Felixwang007/awesome-content-tools/blob/main/tools/trunc/trunc_probe.py"><code>tools/trunc/trunc_probe.py</code></a>（纯标准库，<code>selftest</code> 25/25，退出码就是结论）。</p>
+<hr />
+<h2>1. 四种「读了一半」，只有一种会喊出声</h2>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>现场读数</th>
+<th>客户端会怎么想</th>
+<th>该怎么判</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>好截断</strong>（有信号）</td>
+<td>读 465,000 字节 / 5,000 行的文件，返回 <strong>1,042 行</strong>，同时给出 <code>truncated_by: bytes</code>、<code>total_lines: 5000</code>、<code>next_offset: 1043</code></td>
+<td>知道自己没读完，也知道从哪继续</td>
+<td><code>TRUNCATED</code> + 有续读点</td>
+</tr>
+<tr>
+<td><strong>坏截断</strong>（200 + 半截正文）</td>
+<td>GitHub <code>per_page=1000</code>：<strong>5 次抓取，5 次半截</strong>，<code>IncompleteRead(49311 bytes read, 16225 more expected)</code></td>
+<td>最容易误判成「数据坏了 / 接口不稳」</td>
+<td><code>TRUNCATED</code>，动作是重试或降低每页条数</td>
+</tr>
+<tr>
+<td><strong>静默封顶</strong>（无信号）</td>
+<td>请求 <code>limit=5000</code>，实得 <strong>1000</strong>，且没有 <code>total</code> / <code>has_more</code> / <code>next</code> / <code>Link</code> 任何一个总量字段</td>
+<td>认为「这就是全部 1000 条」</td>
+<td><code>UNKNOWN</code>，<strong>不许当绿</strong></td>
+</tr>
+<tr>
+<td><strong>假完整</strong>（翻到空页）</td>
+<td>Algolia：<code>nbHits=533,692</code>，<code>hitsPerPage=5000</code> 实得 <strong>1,000</strong> 条、<code>nbPages=1</code>；翻到 <code>page=10</code> 时返回 <strong>200 + hits=0 + nbHits=0 + nbPages=0</strong></td>
+<td>「空页 = 到底了 = 我拿全了 1000 条」</td>
+<td><code>TRUNCATED</code>，而且续读点根本不存在</td>
+</tr>
+</tbody>
+</table>
+<p>第三种和第四种是最贵的：它们不报错、不抛异常、不打印 "truncated"，退出码 0，日志干净，流水线一路绿灯跑到终点——<strong>最后交付的结论建立在 0.19% 的数据上。</strong></p>
+<hr />
+<h2>2. 同一个端点：要不要得更多，决定了你读不读得到</h2>
+<p><code>GET https://api.github.com/repos/torvalds/linux/commits</code>，同一个仓库，同一个 UA，只改 <code>per_page</code>：</p>
+<table>
+<thead>
+<tr>
+<th>请求</th>
+<th>抓取次数</th>
+<th>拿到完整 body</th>
+<th>半截</th>
+<th>完整时的读数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>per_page=1</code></td>
+<td>1</td>
+<td><strong>1</strong></td>
+<td>0</td>
+<td>1 条，5,359 字节，响应头仍带 <code>rel="next"</code></td>
+</tr>
+<tr>
+<td><code>per_page=100</code></td>
+<td>18（12 + 6 两轮）</td>
+<td><strong>4</strong>（22%）</td>
+<td>14</td>
+<td>100 条，634,981 字节，响应头带 <code>rel="next"</code> 和 <code>page=1102337</code> 的 <code>rel="last"</code></td>
+</tr>
+<tr>
+<td><code>per_page=1000</code></td>
+<td>5</td>
+<td><strong>0</strong></td>
+<td>5</td>
+<td>—（一次都没拿到能解析的 body）</td>
+</tr>
+</tbody>
+</table>
+<p>第一次失败的那条错误长这样：</p>
+<pre><code>http.client.IncompleteRead: IncompleteRead(49311 bytes read, 16225 more expected)
+</code></pre>
+<p><code>49311 + 16225 = 65536</code>——<strong>正好一个 64 KiB 分块</strong>。这不是接口在返回错误数据，是传输层在一个 chunk 边界断掉，而 HTTP 状态码已经是 200。</p>
+<p>这里有两个必须分开的动作：</p>
+<ol>
+<li><strong><code>200 + JSON 解析失败</code> 的正确解释是「半截」，不是「坏数据」。</strong> 如果把它归类成数据问题，你会去查编码、查转义、查 schema，而真正该做的是重试或者把每页条数降到 100 以下。</li>
+<li><strong>重试成功不等于读全。</strong> 上表里 <code>per_page=100</code> 那唯一一次成功的响应，看起来「完整、干净、退出码 0」——但它同时带着 <code>rel="next"</code>，服务端在同一个响应里明说：还有第 2 页，一直到第 1,102,337 页。</li>
+</ol>
+<p>一次干净的 200，可以是只读了第 1 页而误以为在读全集的完美样本。</p>
+<hr />
+<h2>3. 最贵的那种：翻到空页被当成「读完了」</h2>
+<p>HN Algolia 搜索 <code>query=agent</code>，同一个请求间隔几分钟各打一次：</p>
+<pre><code>hitsPerPage=100  -&gt; nbHits=533688 hits=100  page=0 nbPages=10
+hitsPerPage=5000 -&gt; nbHits=533689 hits=1000 page=0 nbPages=1
+</code></pre>
+<p>先把两个坑拆开：</p>
+<ul>
+<li><strong>要 5000 给 1000</strong>：请求 <code>hitsPerPage=5000</code>，实得 1,000 条。字段是给全的（<code>nbHits</code> 就在旁边），所以一个稍微认真点的客户端能发现「总数 533,689 ≠ 我手上 1,000」。</li>
+<li><strong><code>nbPages=1</code> 更坏</strong>：它告诉你「就一页」。只翻页不读总量的客户端会得出「第 1 页 = 最后一页 = 结束了」，然后心满意足地停在 1,000 条。</li>
+</ul>
+<p>真正致命的是第三步。按 <code>hitsPerPage=100</code> 往后翻：</p>
+<pre><code>page=9  -&gt; HTTP 200  hits=100  nbHits=533692  nbPages=10
+page=10 -&gt; HTTP 200  hits=0    nbHits=0       nbPages=0
+page=11 -&gt; HTTP 200  hits=0    nbHits=0       nbPages=0
+</code></pre>
+<p><code>page=9</code> 是第 10 页、刚好第 1,000 条，一切正常。<strong><code>page=10</code> 越过了硬顶，服务端不但给你空页，还顺手把 <code>nbHits</code> 和 <code>nbPages</code> 一起改成了 0。</strong></p>
+<p>于是行业里最常见的那段循环——</p>
+<pre><code class="language-python">while True:
+    page = fetch(page_no)
+    if not page[&quot;hits&quot;]:
+        break          # 空页 = 到末尾 = 我拿全了
+    all_rows.extend(page[&quot;hits&quot;])
+</code></pre>
+<p>——在这条路径上会安静地成功退出，<code>all_rows</code> 长度 1,000，<code>nbHits</code> 那一刻读到的也是 0，<strong>没有任何一处数据和「已经取全集」矛盾</strong>。实际差 532,692 条。</p>
+<p>顺便记一个小事实：三次读到的总量分别是 <strong>533,688 / 533,689 / 533,692</strong>。总量字段本身在分钟级漂移（这是活的搜索索引）。所以「拿到的条数 == 声明总量」这种对账不能要求纯相等，得允许小幅漂移，否则你会把正常翻页判成不一致。</p>
+<hr />
+<h2>4. 为什么「没有截断标记」不能当全集证明</h2>
+<p>这是全篇唯一一条逻辑，也是所有假绿灯的来源：</p>
+<blockquote>
+<p><strong>「我读到的范围里没有 truncate 标记」是一句关于「我手上这份数据」的话；<br />
+「我拿到了全集」是一句关于「它没给我的那部分」的话。</strong></p>
+</blockquote>
+<p>后者不可能由前者推出。截断标记是「有人在替你把关」时才存在的奢侈品：好工具会主动在输出里写 <code>truncated</code>、写 <code>next_offset</code>、写 <code>total_lines</code>；HTTP 会写 <code>Link: rel="next"</code>；有的 API 会写 <code>has_more</code>。这些东西是<strong>别人给你的证据</strong>，不是你自己测出来的事实。</p>
+<p>所以判定不该是两态（成功 / 失败），而是三态：</p>
+<table>
+<thead>
+<tr>
+<th>判定</th>
+<th>含义</th>
+<th>需要什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>COMPLETE</code></td>
+<td>有正面证据说明这确实是全部</td>
+<td><code>total == items</code>，或 <code>has_more=false</code>，或显式结束标记，或「行数读完且字节数对上」</td>
+</tr>
+<tr>
+<td><code>TRUNCATED</code></td>
+<td>有正面证据说明这不是全部</td>
+<td>显式截断措辞 / <code>total &gt; items</code> / <code>rel="next"</code> / 200+半截正文 / 覆盖区间不足</td>
+</tr>
+<tr>
+<td><code>UNKNOWN</code></td>
+<td>两边证据都没有</td>
+<td>默认结局。<strong>不是「应该没问题」</strong></td>
+</tr>
+</tbody>
+</table>
+<p>第三条是重点：<code>UNKNOWN</code> 是一个<strong>结论</strong>，不是一个待定状态。它意味着「我不知道我有没有读全」，所以下游要么去补齐证据，要么在措辞和置信度上降级——不能拿它当绿。</p>
+<hr />
+<h2>5. 八条规则 + 一个默认结局</h2>
+<p>判定按三层证据走（流层 / 集合层 / 语义层），任何一层给出截断证据就判 <code>TRUNCATED</code>，直接压过其他层的乐观信号：</p>
+<table>
+<thead>
+<tr>
+<th>规则</th>
+<th>层</th>
+<th>证据</th>
+<th>判定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TR001</code></td>
+<td>语义</td>
+<td>正文/备注命中截断措辞（<code>truncated</code>、<code>已截断</code>、<code>showing first</code>、<code>more expected</code>…），或给了 <code>next_offset</code></td>
+<td>TRUNCATED</td>
+</tr>
+<tr>
+<td><code>TR002</code></td>
+<td>集合</td>
+<td>声明 <code>total &gt; items</code></td>
+<td>TRUNCATED</td>
+</tr>
+<tr>
+<td><code>TR003</code></td>
+<td>集合</td>
+<td><code>has_more: true</code></td>
+<td>TRUNCATED</td>
+</tr>
+<tr>
+<td><code>TR004</code></td>
+<td>流</td>
+<td>响应头 <code>Link: rel="next"</code></td>
+<td>TRUNCATED</td>
+</tr>
+<tr>
+<td><code>TR005</code></td>
+<td>流</td>
+<td><code>status=200</code> 但正文解析失败；或 <code>bytes_read &lt; bytes_expected</code>；或 <code>lines_read &lt; lines_total</code></td>
+<td>TRUNCATED</td>
+</tr>
+<tr>
+<td><code>TR006</code></td>
+<td>集合</td>
+<td>请求 <code>limit</code> 大于实得、实得命中常见上限（100/1000/5000…），且<strong>完全没有</strong>总量字段</td>
+<td>UNKNOWN</td>
+</tr>
+<tr>
+<td><code>TR007</code></td>
+<td>语义</td>
+<td><code>items=0</code> 且 <code>total&gt;0</code> → TRUNCATED；<code>items=0</code> 且零证据 → UNKNOWN</td>
+<td>TRUNCATED / UNKNOWN</td>
+</tr>
+<tr>
+<td><code>TR008</code></td>
+<td>集合</td>
+<td>请求 <code>offset</code> 与响应首条索引不一致 → UNKNOWN；已在翻页中途但区间没到 <code>total</code> → TRUNCATED</td>
+<td>UNKNOWN / TRUNCATED</td>
+</tr>
+<tr>
+<td><code>TR009</code></td>
+<td>—</td>
+<td><strong>没有任何完整性正面证据</strong></td>
+<td>UNKNOWN</td>
+</tr>
+</tbody>
+</table>
+<p><code>TR006</code> 值得单独说一句：它特意判 <code>UNKNOWN</code> 而不是 <code>TRUNCATED</code>。因为「1000」既可能是封顶，也可能真的只有 1000 条，我用一次请求分不出来。<strong>把「我怀疑」写成「它就是」是把启发式当事实</strong>，那个错误比漏报更难修，因为下游会按「已确认截断」去动作。</p>
+<hr />
+<h2>6. 六份快照，六条真实判定</h2>
+<p>工具吃一份快照 JSON（<code>kind</code> + <code>request</code> + <code>response</code>），吐判定 + 证据 + 续读点。退出码就是结论，可直接挂门禁：<code>0</code> COMPLETE / <code>2</code> TRUNCATED / <code>3</code> UNKNOWN / <code>4</code> 零输入 / <code>5</code> 自检失败。</p>
+<pre><code>$ python tools/trunc/trunc_probe.py judge samples/read_file_big_file.json
+判定: TRUNCATED   (kind=file)
+  [TR001] TRUNCATED: 正文/备注命中截断措辞: (showing/showing lines/truncat/truncated
+  [TR001] TRUNCATED: 响应给出 next_offset=1043（服务端明说还有后续）
+  [TR005] TRUNCATED: 读到 100000 字节 / 声明 465000 字节（差 365000）
+  [TR005] TRUNCATED: 读到 1042 行 / 共 5000 行（差 3958）
+续读: 从 next_offset=1043 续读
+exit=2
+</code></pre>
+<pre><code>$ python tools/trunc/trunc_probe.py judge samples/algolia_hits_cap.json
+判定: TRUNCATED   (kind=list)
+  [TR002] TRUNCATED: 声明 total=533689，实得 items=1000（缺 532689）
+续读: 从 offset=1000 续读（假定该 API 用 offset/limit 语义且顺序稳定；用 page/per_page 的 API 需换算，且部分 API 有硬顶翻不过去）
+exit=2
+</code></pre>
+<pre><code>$ python tools/trunc/trunc_probe.py judge samples/github_per_page_100_complete_but_not_all.json
+判定: TRUNCATED   (kind=http)
+  [TR004] TRUNCATED: 响应头带 rel=&quot;next&quot;（服务端自认还有下一页）
+续读: 从 offset=100 续读（假定该 API 用 offset/limit 语义且顺序稳定；用 page/per_page 的 API 需换算，且部分 API 有硬顶翻不过去）
+exit=2
+</code></pre>
+<pre><code>$ python tools/trunc/trunc_probe.py judge samples/github_per_page_1000_short_body.json
+判定: TRUNCATED   (kind=http)
+  [TR001] TRUNCATED: 正文/备注命中截断措辞: more expected
+  [TR004] TRUNCATED: 响应头带 rel=&quot;next&quot;（服务端自认还有下一页）
+  [TR005] TRUNCATED: status=200 但正文解析失败 —— 这是半截正文，不是坏数据
+  [TR005] TRUNCATED: 读到 49311 字节 / 声明 65536 字节（差 16225）
+续读: 无法给出续读点：先拿到总量字段再续读
+exit=2
+</code></pre>
+<pre><code>$ python tools/trunc/trunc_probe.py judge samples/constructed_silent_cap.json
+判定: UNKNOWN   (kind=list)
+  [TR006] UNKNOWN: 请求 limit=5000 实得 1000（命中常见上限 1000），且无 total/has_more/next/Link 任何总量字段 —— 无法区分「只有这些」和「封顶了」
+  [TR009] UNKNOWN: 既无截断证据也无完整性证据 —— 「没看到 truncated」不能当全集证明
+续读: 从 offset=1000 续读（假定该 API 用 offset/limit 语义且顺序稳定；用 page/per_page 的 API 需换算，且部分 API 有硬顶翻不过去）
+exit=3
+</code></pre>
+<pre><code>$ python tools/trunc/trunc_probe.py judge samples/constructed_complete.json
+判定: COMPLETE   (kind=list)
+完整性证据: total==items==12; has_more=false
+exit=0
+</code></pre>
+<p>注意第三例：<strong>一次 HTTP 200、JSON 完全合法、100 条整整齐齐</strong>的响应，判定是 <code>TRUNCATED</code>。它跟「数据干净」不冲突，只是它同时带着 <code>rel="next"</code>。</p>
+<p>六份快照里有四份是今天现场抓的（Algolia、GitHub 两个、本地大文件），两份是构造样本，文件名里直说了 <code>constructed_</code>——<strong>样本来源必须写在文件名里</strong>，否则三个月后没人分得清哪条是实测、哪条是想象。</p>
+<hr />
+<h2>7. 挂进 Agent 流水线：四条硬规则</h2>
+<ol>
+<li><strong>工具返回必须带「总量三件套」之一：<code>total</code> / <code>has_more</code> / <code>next_offset</code>。</strong> 自己包的工具、自己写的 MCP 都一样。拿不到就别指望模型自己意识到它没读全——模型的输入里根本没有「没给它的那部分」。</li>
+<li><strong><code>UNKNOWN</code> 不许写成产出。</strong> 读到 <code>UNKNOWN</code> 的处理只有两种：补证据（再请求一次总量，或换个能给出总量的端点），或者把结论降级为「基于前 N 条的部分观察」，并在交付物里写清 N 和已知总量。</li>
+<li><strong>终止判据不能只看「空了」。</strong> 空页必须与声明总量对账才叫结束；对账要允许总量漂移（今天三次读到 533,688 / 533,689 / 533,692），所以判据是「实得条数 ≈ 声明总量，差值在漂移范围内」，而不是严格相等，也不是「空页即完」。</li>
+<li><strong>重试前先分类错误。</strong> <code>200 + parse fail</code> = 半截（重试 / 降 page size，今天 <code>per_page=1000</code> 是 5/5 失败、<code>per_page=100</code> 是 4/18 成功、<code>per_page=1</code> 是 1/1 成功）；<code>4xx</code> = 请求错（重试无用）；<code>200 + parse ok + 没有总量字段</code> = 不知道（补证据，不是重试）。</li>
+</ol>
+<p>第 4 条是今天最实用的一条：<strong>同一个接口，把每页条数从 1000 降到 100，成功率从 0% 变成 22%，再降到 1 就是 100%。</strong> 很多「接口不稳」的抱怨，其实是「一次要得太多」的换名。</p>
+<hr />
+<h2>8. 边界声明（这套东西不做什么）</h2>
+<ul>
+<li><strong>快照是调用方提供的事实。</strong> <code>judge</code> 不抓网络、不读文件、不算哈希，它只对你喂进去的那几个字段负责。字段填错，判定跟着错——这是设计，不是 bug。</li>
+<li><strong>不做语义判重。</strong> 重复项不等于缺项，缺项也不等于重复，那是另一套工具的事。</li>
+<li><strong><code>TR006</code> 是怀疑不是结论</strong>，所以它判 <code>UNKNOWN</code>。想要它变成 <code>TRUNCATED</code>，得先拿到 <code>total</code>。</li>
+<li><strong><code>total</code> 漂移时可能不判 <code>COMPLETE</code>。</strong> 声明 533,689 到手 533,688 会被判 <code>TRUNCATED</code>（缺 1 条）。这是故意的：宁可多报一次，也不要把「差一条」当成「全了」。真要放宽，自己在上游做容许区间，别改规则。</li>
+<li><strong>续读点是建议不是保证。</strong> 它假定该 API 用 <code>offset/limit</code> 语义且顺序稳定；Algolia 那条路径上 1,000 就是硬顶，续读点根本不存在——所以续读建议必须被执行方验证一次。</li>
+<li><strong>25 项自检覆盖规则语义，不覆盖网络行为。</strong> 网络今天给出 50% 以上的半截率，明天可能为 0，这不是自检能保证的，只能实测。</li>
+</ul>
+<hr />
+<h2>一句话版</h2>
+<p><strong>「我读到了」和「我读完了」是两个命题，中间隔着一个必须有人主动提供的数字。</strong> 没有那个数字，正确的答案不是「应该读完了」，而是「不知道」——然后在交付物里把这句话写出来。</p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "_note": "构造样本（非实测）：真正完整的响应长什么样 —— 声明总量与实得相等，并且明确 has_more=false。COMPLETE 需要这种正面证据，而不是「没看到 truncated」。",
+  "kind": "list",
+  "request": {
+    "url": "https://api.example.com/items?limit=12",
+    "limit": 12,
+    "offset": 0
+  },
+  "response": {
+    "status": 200,
+    "parse": "ok",
+    "items": 12,
+    "total": 12,
+    "has_more": false
+  }
+}

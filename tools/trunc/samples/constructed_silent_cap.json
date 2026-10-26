@@ -1,0 +1,14 @@
+{
+  "_note": "构造样本（非实测）：服务端一声不响封顶在 1000，且不提供 total / has_more / next / Link 任何总量字段。这是本工具最想拦住的那种输入：它看起来和「全集就是 1000 条」一模一样。",
+  "kind": "list",
+  "request": {
+    "url": "https://api.example.com/items?limit=5000",
+    "limit": 5000,
+    "offset": 0
+  },
+  "response": {
+    "status": 200,
+    "parse": "ok",
+    "items": 1000
+  }
+}

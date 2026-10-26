@@ -1,0 +1,18 @@
+{
+  "_note": "真实快照：本机 read_file 读一个 5,000 行 / 465,000 字节的文件，返回 1,042 行后停住，但同时给出 truncated_by=bytes、total_lines=5000、next_offset=1043 —— 这是有信号的截断，属于「好截断」。",
+  "kind": "file",
+  "request": {
+    "path": "bigfile.txt",
+    "limit": 2000,
+    "offset": 1
+  },
+  "response": {
+    "parse": "ok",
+    "lines_read": 1042,
+    "lines_total": 5000,
+    "bytes_read": 100000,
+    "bytes_expected": 465000,
+    "next_offset": 1043,
+    "note": "Output truncated at the 100,000-char read budget after 1042 line(s) (showing lines 1-1042 of 5000). Use offset=1043 to continue. truncated_by: bytes"
+  }
+}
