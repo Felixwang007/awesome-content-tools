@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>同一个端口，timeout=2 判超时、timeout=3 判「拒绝连接」：把超时拆成五段，才知道该修哪一段</title>
+    <meta name="description" content="2026-10-28 本机实跑的请求超时分层测量（数字全部原样输出）：①一个 21 秒的悬案——会话开始时 curl https://github.com/ 返回 000 / time_total=21.025939，同一会话稍后同一 URL 返回 SLOW_UP / 71,240 字节 / 0.803 秒；单独测量「系统何时放弃」得到 21.015 秒（WinError 10060），两者只差 10.94 毫秒，证明那 21 秒不是任何人的超时，而是内核 SYN 重试放弃点——把阈值从 10 改成 30/60 在这一层等于什么都没做。②十个目标的逐阶段读数（DNS/TCP/TLS/首字节/整包 + 实等 elapsed）：api.github.com 0.0147/0.0963/0.2038/0.1579/0.7549、github.com 0.0066/0.0795/0.0827/0.2366/0.8030、Pages CDN 1.7553、api.deepseek.com 0.1461、本机开着端口 0.0472、raw.githubusercontent.com（TCP 从未建立）6.0003、10.255.255.1 6.0000、不存在的域名 0.0010——**最快与最慢的失败差 6000 倍，而在日志里都叫 timeout**。③同一个关闭端口、只改阈值就翻转判定：关闭环回端口的 RST 到达 2.0149/2.0090/2.0064 秒（三次复跑），timeout=2.0 判 CONNECT_TIMEOUT（tcp=2.0002）而 timeout=3.0 判 CONNECT_REFUSED（tcp=2.0129）——判定名不是事实，读数才是。④六态判定（UP/SLOW_UP/STALLED_NO_BYTES/STALLED_PARTIAL/TRUNCATED/CONNECT_*/TLS_FAIL/DNS_FAIL）与「有进展=字节到达，不是时间」的判据；相位占比不稳定（同一目标十分钟内 TLS 段 0.5202→0.0827，6.3 倍），相位拆分只用于定位断点、不用于容量估算。⑤每段归谁管（DNS/内核与过滤驱动/证书与服务端/上游排队/链路）与七行重试动作表，红线是「请求已发出且可能产生副作用之后不重试」。⑥重试预算公式与实测：3 次 × 6 秒阈值串行 18.01s（复跑 18.19s），并行 3 次 6.05s（3.0x），对「连不上」串行重试是纯乘法。⑦分相位超时的四种写法（requests (connect,read) 元组 / httpx Timeout 四段 / 裸 socket settimeout / curl 的 --connect-timeout 与 --max-time 之分，后者不是分相位）。⑧工具 tools/timeout/phase_probe.py（probe/classify/selftest，纯标准库，32 项自检，退出码 0 有进展/2 连上没走完/3 没连上/4 零输入/5 自检失败），classify 对今天十行读数离线复判与在线判定 10/10 一致，样本 tools/timeout/samples/live_readings_20261028.json。⑨写这个工具时自检抓出的三个真 bug：中途解析的头部被当成最终头部（正常 200 被判 TRUNCATED）、断言写成了平台假设（「关闭端口必 RST<0.05s」在本机实测 2.01s 直接打脸，改为锁不变量）、相位缺失被当成相位失败（https 且 tls_s 为空被判 TLS_FAIL，把两个「TCP 从未建立」的样本判成两种相反动作）——三条都已补成回归断言。含十条落地规则与七条边界声明（只描述一次测量、不预测下一次、read_cap 是工具自己的上限不冒充对端截断、无 deepest_phase 时不猜）。">
+    <meta name="keywords" content="超时,timeout,connect timeout,read timeout,分相位超时,DNS解析,TCP连接,TLS握手,首字节,TTFB,time_total,curl --connect-timeout,--max-time,requests timeout tuple,httpx Timeout,settimeout,SYN重试,WinError 10060,WinError 10061,RST,连接被拒绝,CONNECT_REFUSED,CONNECT_TIMEOUT,DNS_FAIL,TLS_FAIL,STALLED_NO_BYTES,STALLED_PARTIAL,TRUNCATED,Content-Length,chunked,假成功,重试预算,retry budget,指数退避,幂等重试,负期望重试,网络诊断,链路排查,CLI工具,退出码门禁,selftest,采样与判定分离,离线复判,classify,AI Agent工程,自动化可靠性,Python标准库,Windows网络,过滤器驱动,页面无响应排查">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/timeout-phase-splitting-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>同一个端口，timeout=2 判超时、timeout=3 判「拒绝连接」：把超时拆成五段，才知道该修哪一段</h1>
+<p>今天同一次会话里，同一台机器对 <code>https://github.com/</code> 给出过两个完全不同的答案：</p>
+<pre><code>本次会话开始时  curl -w &quot;%{http_code} %{time_total}&quot;  -&gt;  000   21.025939
+同一会话稍后    phase_probe probe                     -&gt;  SLOW_UP  elapsed 1.2601s  bytes 71240
+</code></pre>
+<p>中间没有任何人改配置。如果只看第一个读数，结论是「GitHub 挂了」；只看第二个，结论是「一切正常」。两个结论都能被日志支持，但都是错的——<strong>因为它们把不同阶段的现象塞进了同一个叫「超时」的桶里。</strong></p>
+<p>这篇文章做的只有一件事：把「超时」拆成五个可以被分别测量的阶段（DNS / TCP / TLS / 首字节 / 整包），然后用本机实测说明，为什么一个数字撑不起这个语义。</p>
+<p>所有数字都是 2026-10-28 在本机跑出来的，工具在 <a href="https://github.com/Felixwang007/awesome-content-tools/blob/main/tools/timeout/phase_probe.py"><code>tools/timeout/phase_probe.py</code></a>（纯标准库，<code>selftest</code> 32/32，退出码就是结论）。</p>
+<hr />
+<h2>1. 那个 21 秒不是任何人的超时</h2>
+<p>先把 21 秒的来源坐实。它不是 curl 的 <code>--max-time</code>，也不是某个 SDK 的默认值——它是我没设置过、但一直生效的那个东西：<strong>操作系统的 SYN 重试放弃点</strong>。</p>
+<p>单独测它（<code>connect</code> 到不可路由地址，把探测阈值放宽到 40 秒，让系统自己决定何时放弃）：</p>
+<pre><code>== C. 系统自己何时放弃（不可路由地址，阈值给 40s）==
+  10.255.255.1:80  21.015s  TimeoutError: [WinError 10060] 由于连接方在一段时间后没有正确答复...
+</code></pre>
+<p><strong>21.015 秒。</strong> 会话开始时那次 curl 的 <code>time_total</code> 是 21.025939。两个数只差 <strong>10.94 毫秒</strong>，指向同一件事：那 21 秒不是我给的预算，是内核的预算。</p>
+<p>这条推论很硬：</p>
+<blockquote>
+<p>把「超时」从一个数改成 30 / 60，你在这一层等于什么都没做——<strong>内核早在 21 秒就替你决定了结论</strong>。你的数字只在这条线以内才有意义。</p>
+</blockquote>
+<p>而如果这条路径不是「没人应答」而是「有人拒绝」，时间尺度会掉三个数量级。</p>
+<hr />
+<h2>2. 十个目标，五种「连不上」</h2>
+<p>同一时刻对本机发十次请求，逐阶段计时：</p>
+<table>
+<thead>
+<tr>
+<th>目标</th>
+<th>判定</th>
+<th>DNS</th>
+<th>TCP</th>
+<th>TLS</th>
+<th>首字节</th>
+<th>字节</th>
+<th>实等</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api.github.com/rate_limit</code></td>
+<td><code>UP</code></td>
+<td>0.0147</td>
+<td>0.0963</td>
+<td>0.2038</td>
+<td>0.1579</td>
+<td>1,364</td>
+<td><strong>0.7549</strong></td>
+</tr>
+<tr>
+<td><code>github.com/</code></td>
+<td><code>SLOW_UP</code></td>
+<td>0.0066</td>
+<td>0.0795</td>
+<td>0.0827</td>
+<td>0.2366</td>
+<td>71,234</td>
+<td><strong>0.8030</strong></td>
+</tr>
+<tr>
+<td><code>codeload.github.com/…tar.gz</code></td>
+<td><code>SLOW_UP</code></td>
+<td>0.0005</td>
+<td>0.0854</td>
+<td>0.0775</td>
+<td>0.4193</td>
+<td>66,399</td>
+<td><strong>0.7404</strong></td>
+</tr>
+<tr>
+<td><code>felixwang007.github.io/…</code></td>
+<td><code>UP</code></td>
+<td>0.0006</td>
+<td>0.2526</td>
+<td>0.2344</td>
+<td>0.4839</td>
+<td>20,217</td>
+<td><strong>1.7553</strong></td>
+</tr>
+<tr>
+<td><code>api.deepseek.com/</code></td>
+<td><code>UP</code></td>
+<td>0.0038</td>
+<td>0.0227</td>
+<td>0.0180</td>
+<td>0.0935</td>
+<td>703</td>
+<td><strong>0.1461</strong></td>
+</tr>
+<tr>
+<td><code>127.0.0.1:18099</code>（开着）</td>
+<td><code>UP</code></td>
+<td>0.0000</td>
+<td>0.0102</td>
+<td>—</td>
+<td>0.0367</td>
+<td>34,487</td>
+<td><strong>0.0472</strong></td>
+</tr>
+<tr>
+<td><code>127.0.0.1:18098</code>（关着）</td>
+<td><code>CONNECT_REFUSED</code></td>
+<td>0.0000</td>
+<td><strong>2.0009</strong></td>
+<td>—</td>
+<td>—</td>
+<td>0</td>
+<td><strong>2.0010</strong></td>
+</tr>
+<tr>
+<td><code>raw.githubusercontent.com/…</code></td>
+<td><code>CONNECT_TIMEOUT</code></td>
+<td>0.0006</td>
+<td><strong>6.0003</strong></td>
+<td>—</td>
+<td>—</td>
+<td>0</td>
+<td><strong>6.0011</strong></td>
+</tr>
+<tr>
+<td><code>10.255.255.1/</code></td>
+<td><code>CONNECT_TIMEOUT</code></td>
+<td>0.0000</td>
+<td><strong>6.0000</strong></td>
+<td>—</td>
+<td>—</td>
+<td>0</td>
+<td><strong>6.0003</strong></td>
+</tr>
+<tr>
+<td><code>no-such-host.invalid/</code></td>
+<td><code>DNS_FAIL</code></td>
+<td><strong>0.0009</strong></td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>0</td>
+<td><strong>0.0010</strong></td>
+</tr>
+</tbody>
+</table>
+<p>这张表里最刺眼的不是谁快谁慢，是<strong>失败的代价差 6000 倍</strong>：</p>
+<ul>
+<li><code>no-such-host.invalid</code> 用 <strong>1.0 毫秒</strong> 失败——名字根本不存在，解析器立刻说「没有」。</li>
+<li><code>127.0.0.1:18098</code>（本机一个确定关闭的端口）用 <strong>2.0010 秒</strong> 失败。</li>
+<li><code>raw.githubusercontent.com</code> 和 <code>10.255.255.1</code> 用满了我给的 6 秒，一个字节都没回来。</li>
+</ul>
+<p>三种情况的用户观感完全一样：卡住了、没结果。<strong>但它们该触发的动作不一样</strong>：一个是改配置，一个是重启服务，一个是换出口。</p>
+<p>而且注意 <code>github.com</code> 那一行：<code>SLOW_UP</code>，实等 0.80 秒，比 <code>api.github.com</code> 的 0.75 秒只慢 6.4%——<strong>同一个域的一对端点，会话开始时还一个是 000、一个是 200，几分钟后几乎同速。</strong> 用「超时了」三个字记录这两件事，等于把「今天网络抖了一下」和「这个域名长期不可达」写进同一个格子。</p>
+<hr />
+<h2>3. 同一个端口，判定被阈值决定</h2>
+<p>这是今天最不该出现、但确实复现了三次的现象。</p>
+<p>一个确定关闭的环回端口（绑一个端口再关掉，确保没人监听），<strong>只改探测阈值</strong>：</p>
+<pre><code>== A. 关闭的环回端口：RST 到底几秒才到（阈值给 15s）==
+  run1 port=11818  2.0149s  ConnectionRefusedError: [WinError 10061] 目标计算机积极拒绝
+  run2 port=11818  2.0090s  ConnectionRefusedError: [WinError 10061]
+  run3 port=11818  2.0064s  ConnectionRefusedError: [WinError 10061]
+
+== B. 同一关闭端口，不同阈值的判定（2 vs 3）==
+  timeout=2.0 -&gt; CONNECT_TIMEOUT   tcp=2.0002s
+  timeout=3.0 -&gt; CONNECT_REFUSED   tcp=2.0129s
+</code></pre>
+<p>三件事：</p>
+<ol>
+<li><strong>「连接被拒绝」在这台机器上不是即时的。</strong> 教科书写的是「对端回一个 RST，毫秒级」，实测是 <strong>2.01 秒</strong>（三次复跑：2.0149 / 2.0090 / 2.0064）。这 2 秒来自 SYN 重传节奏叠加本机的网络过滤驱动，不是我的代码。</li>
+<li><strong>阈值 2.0 正好落在 RST 到达时刻之前 2 毫秒。</strong> 于是同一个端口、相隔不到一秒，<code>timeout=2</code> 判「SYN 没应答」，<code>timeout=3</code> 判「对端拒绝」。</li>
+<li>这两个判定在监控面板上是两个不同的告警，<strong>而事实只有一条</strong>。</li>
+</ol>
+<blockquote>
+<p><strong>判定名不是事实，读数才是。</strong> 任何把 <code>timeout</code> 调成整数（1/2/5/10）的习惯，都在赌自己的阈值不会正好压在某个真实延迟的边界上。</p>
+</blockquote>
+<hr />
+<h2>4. 六个状态，只有一个真的叫「慢」</h2>
+<p>工具只输出六种终态，因为再多的名字就开始互相污染：</p>
+<table>
+<thead>
+<tr>
+<th>判定</th>
+<th>标志</th>
+<th>意思是</th>
+<th>退出码</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>UP</code></td>
+<td>读到 EOF，首字节 &lt; 阈值</td>
+<td>正常</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>SLOW_UP</code></td>
+<td>读到 EOF（或探测自己的 read_cap），首字节 &gt; 阈值</td>
+<td><strong>在走，只是慢</strong></td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>STALLED_NO_BYTES</code></td>
+<td>TCP（可能还有 TLS）已建立，<strong>零字节到达</strong></td>
+<td>连上了，对端不说话</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>STALLED_PARTIAL</code></td>
+<td>收到若干字节，头部/body 无结束标记</td>
+<td>说到一半停了</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>TRUNCATED</code></td>
+<td><code>Content-Length</code> 声明 N，实收 &lt; N，连接先关</td>
+<td>说了，但没说完</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>CONNECT_TIMEOUT</code> / <code>CONNECT_REFUSED</code> / <code>TLS_FAIL</code> / <code>DNS_FAIL</code></td>
+<td>到不了对端</td>
+<td><strong>根本没连上</strong></td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p><code>UP</code> 与 <code>SLOW_UP</code> 的区别只在阈值，但 <code>STALLED_*</code> 与它们的区别是<strong>有没有字节到达</strong>——这个区别不能靠时间，只能靠计数。这就是为什么「把所有 timeout 调大」是最差的修法：它把 <code>STALLED_NO_BYTES</code> 从「2 秒的疑问」变成「60 秒的沉默」，判定一点没变。</p>
+<p>还有个诚实的细节：<code>SLOW_UP</code> 有一句说明是「读到 read_cap 主动停（未被截断，是探测自己设的上限）」。<strong>工具自己的上限不能算成对端的截断</strong>——这两件事在读数里长得像，在结论里完全不同。</p>
+<h3>4.1 相位占比不稳定，别拿单次读数做归因</h3>
+<p>同一批目标相隔十分钟跑两轮，<code>tcp/tls/ttfb</code> 三段的排名会换位：</p>
+<table>
+<thead>
+<tr>
+<th>目标</th>
+<th>第一轮 tcp/tls/ttfb</th>
+<th>第二轮 tcp/tls/ttfb</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api.github.com</code></td>
+<td>0.0828 / 0.0926 / 0.1629</td>
+<td>0.0963 / <strong>0.2038</strong> / 0.1579</td>
+</tr>
+<tr>
+<td><code>github.com</code></td>
+<td>0.0980 / <strong>0.5202</strong> / 0.1792</td>
+<td>0.0795 / <strong>0.0827</strong> / 0.2366</td>
+</tr>
+<tr>
+<td><code>codeload</code></td>
+<td>0.0871 / 0.0801 / 0.5013</td>
+<td>0.0854 / 0.0775 / 0.4193</td>
+</tr>
+</tbody>
+</table>
+<p><code>github.com</code> 的 TLS 段从 <strong>0.5202 秒掉到 0.0827 秒（6.3 倍）</strong>。如果第一轮之后我写下「瓶颈在 TLS 握手」，那条结论十分钟后就被自己的读数推翻了。<strong>相位拆分用来定位「断在哪一段」，不用来估算容量。</strong></p>
+<hr />
+<h2>5. 每段归谁管：这才是拆开它的收益</h2>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>谁决定它</th>
+<th>重试有用吗</th>
+<th>该动的地方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DNS</td>
+<td>解析器、上游 DNS、缓存 TTL</td>
+<td>有时（换 resolver、热缓存）</td>
+<td>别把 DNS 算进 connect 预算</td>
+</tr>
+<tr>
+<td>TCP</td>
+<td>内核 SYN 重试、防火墙/过滤驱动、中间设备</td>
+<td>低——同一路径大概率同样结果</td>
+<td>早失败、降阈值、换出口</td>
+</tr>
+<tr>
+<td>TLS</td>
+<td>证书链、SNI、中间人、后量子握手</td>
+<td>基本无用</td>
+<td>查证书/SNI，不是加时间</td>
+</tr>
+<tr>
+<td>首字节</td>
+<td>服务端排队、连接池、上游依赖</td>
+<td>中等（幂等读可以）</td>
+<td>缩小请求/降批量</td>
+</tr>
+<tr>
+<td>整包</td>
+<td>响应体大小、链路带宽、限速</td>
+<td>中高</td>
+<td>重试或减量</td>
+</tr>
+</tbody>
+</table>
+<p>把它做成动作表：</p>
+<table>
+<thead>
+<tr>
+<th>判定</th>
+<th>字节到达</th>
+<th>重试</th>
+<th>立刻要做的</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DNS_FAIL</code></td>
+<td>0</td>
+<td>有时</td>
+<td>换 resolver；别的什么都别改</td>
+</tr>
+<tr>
+<td><code>CONNECT_TIMEOUT</code></td>
+<td>0</td>
+<td>低</td>
+<td>降阈值早失败，别用 30s 等内核</td>
+</tr>
+<tr>
+<td><code>CONNECT_REFUSED</code></td>
+<td>0</td>
+<td><strong>高</strong>（服务刚起/端口临时）</td>
+<td>带退避重试；注意 RST 也可能要 2 秒</td>
+</tr>
+<tr>
+<td><code>TLS_FAIL</code></td>
+<td>0</td>
+<td>低</td>
+<td>重试只会重复失败，去查证书</td>
+</tr>
+<tr>
+<td><code>STALLED_NO_BYTES</code></td>
+<td>0</td>
+<td>中</td>
+<td>只对幂等读重试 + 指数退避</td>
+</tr>
+<tr>
+<td><code>STALLED_PARTIAL</code> / <code>TRUNCATED</code></td>
+<td>部分</td>
+<td>中高</td>
+<td>重试或降批量，<strong>绝不能当成功</strong></td>
+</tr>
+<tr>
+<td><code>SLOW_UP</code></td>
+<td>是</td>
+<td>无意义</td>
+<td>调大 read 超时或缩小请求</td>
+</tr>
+</tbody>
+</table>
+<p>一条红线写在最前面：<strong>请求已经发出、且可能产生了副作用之后，不要重试。</strong> 前面的阶段可以重试，因为什么都没发生；后面不行，因为你不知道它到底发生没发生。</p>
+<hr />
+<h2>6. 重试预算：3 次重试就是 3 倍沉默</h2>
+<p>拿 <code>raw.githubusercontent.com</code>（TCP 从未建立）做基线：</p>
+<pre><code>== D. 重试预算：3 次重试 × 阈值 6s 的真实墙钟 ==
+  串行 3 次总墙钟 18.01s      （独立复跑：18.19s）
+  并行 3 次           6.05s   （3.0x）
+</code></pre>
+<p>公式很朴素，但几乎没人写进配置注释：</p>
+<pre><code>最坏墙钟 = ceil(尝试次数 / 并发度) × (connect_超时 + read_超时) + 退避总和
+        = ceil(3 / 1) × (6 + 6)   ← 若 connect 与 read 各给 6
+</code></pre>
+<p>上面实测是 18 秒，因为每一轮的 connect 阶段就吃满了 6 秒，read 阶段根本没开始。<strong>串行重试对「连不上」是纯粹的乘法</strong>：阈值 6 秒 × 3 次 = 18 秒，一个 cron 窗口（常见 60 秒）就这么没了三分之一——而且三次尝试覆盖的是同一条已经死掉的路径。</p>
+<p>这也解释了为什么「并行探测多个出口」在这类故障上收益是 3.0x，而「多试几次同一个出口」收益是 0。</p>
+<hr />
+<h2>7. 各家客户端的「分相位超时」怎么写</h2>
+<p>同一个语义，四种写法，其中一个是坑：</p>
+<pre><code class="language-python"># requests：元组 = (connect, read)，这是唯一真正分相位的常见写法
+requests.get(url, timeout=(3.05, 10))        # connect 3.05s，read 10s
+
+# httpx：显式四段
+httpx.Client(timeout=httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=2.0))
+
+# 裸 socket（本工具用的就是这层，能看见每一段）
+s = socket.socket(); s.settimeout(5); s.connect(addr)   # 只约束 connect
+s = ctx.wrap_socket(s, server_hostname=host)            # TLS 受同一个 settimeout
+s.sendall(req)                                           # 发送同受此约束
+s.recv(65536)                                            # read 也用这个值
+</code></pre>
+<pre><code class="language-bash"># curl：--connect-timeout 只约束连接；--max-time 是总预算上限。
+curl --connect-timeout 3 --max-time 20 -sS -o /dev/null -w '%{http_code} %{time_connect} %{time_starttransfer} %{time_total}\n' https://example.com/
+</code></pre>
+<p><code>curl</code> 那个坑值得单独说：<strong><code>--max-time</code> 不是分相位的</strong>，它是整包总预算。只给 <code>--max-time 30</code> 时，一个卡在 connect 的请求会安静地占满 30 秒——这正好是本篇开头那 21 秒的故事。</p>
+<hr />
+<h2>8. 工具怎么用</h2>
+<pre><code class="language-bash"># 逐阶段计时 + 六态判定 + 实等耗时
+python tools/timeout/phase_probe.py probe https://raw.githubusercontent.com/torvalds/linux/master/README
+
+# 机器可读读数（喂给监控/账本）
+python tools/timeout/phase_probe.py probe --json https://api.github.com/rate_limit &gt; r.json
+
+# 采样与判定分离：用历史读数离线复判，不重新发请求
+python tools/timeout/phase_probe.py classify tools/timeout/samples/live_readings_20261028.json
+
+# 七个本地服务端场景 + 32 项断言
+python tools/timeout/phase_probe.py selftest
+</code></pre>
+<p><code>probe</code> 的真实输出（对本机一个关闭端口）：</p>
+<pre><code>URL      http://127.0.0.1:18098/
+DNS      0.0 s
+TCP      2.0009 s
+TLS      None s
+send     None s
+TTFB     None s
+body/全  None s
+bytes    0 (declared None) status None
+最深阶段 tcp
+判定     CONNECT_REFUSED
+实等     2.0010 s（相位全为 None 时这是唯一能进预算的数）
+说明     RST: [WinError 10061] 由于目标计算机积极拒绝，无法连接。
+</code></pre>
+<p><code>classify</code> 拿今天那十行读数复判，与在线判定 <strong>10/10 一致</strong>（这一步是必须的：判定逻辑要能在没有网络时复算，否则它只是当场的猜测）。</p>
+<hr />
+<h2>9. 今天真被自检抓住的三个 bug</h2>
+<p>写这篇的工具时，<code>selftest</code> 第一轮是 <strong>22/26</strong>。三个缺陷都不是笔误，而是同一个思维习惯的三种形态：</p>
+<p><strong>① 中途解析的头部被当成最终头部 → 正常 200 被判 <code>TRUNCATED</code>。</strong><br />
+第一轮把 <code>Content-Length</code> 与「收到多少字节」相比，但那份头部是在第一个 TCP 分片到达时解析的，<code>body_have</code> 停在 0。于是 <code>124 字节全部收到</code> 的响应被判成「声明 11，实收 0，连接先关」。修法：循环结束后用完整缓冲区重新解析一次头部再比。</p>
+<p><strong>② 断言的是一条平台假设，不是不变量。</strong><br />
+我原本断言「关闭端口 → <code>CONNECT_REFUSED</code>，且 &lt; 0.05 秒」，本机直接打脸：RST 要 2.01 秒来。改成断言不变量——「判死（<code>REFUSED</code> 或 <code>CONNECT_TIMEOUT</code>）、零字节、退出码 3」，并把实测形态打印出来。<strong>测试里写死的平台性格，比不写更危险</strong>，因为它会让工具在别的机器上「正确」地把真故障报成假的。</p>
+<p><strong>③ 相位缺失被当成相位失败。</strong><br />
+<code>classify</code> 第一版拿「URL 是 https 且 <code>tls_s</code> 为空」当 <code>TLS_FAIL</code>。于是 <code>raw.githubusercontent.com</code>（TCP 从未建立，根本没轮到 TLS）被判成 <strong>TLS 失败</strong>，<code>10.255.255.1</code>（收不到 SYN 应答）被判成 <strong><code>STALLED_NO_BYTES</code>（连上了不说话）</strong>。这是两种完全相反的动作（去查证书 vs 去查服务端），却由一个空字段决定。<br />
+修法：判定必须由 <code>deepest_phase</code>（<strong>走到了哪一层</strong>）驱动，而不是由「哪个字段是 None」驱动；没有相位证据时不许猜，返回 <code>UNKNOWN</code>。这三条都补成了回归断言（现在 32/32）。</p>
+<p>顺便说一个诚实的缺口：<strong>没有任何字段记录「探测自己等了多久」时，预算核算只能靠猜。</strong> 第一版 <code>body_s</code> 在零字节场景是 <code>None</code>，于是「3 次重试花了多久」根本算不出来。补了 <code>elapsed_s</code> 之后，第 6 节那 18.01 / 6.05 才成为可引用的数字。</p>
+<hr />
+<h2>10. 十条落地规则</h2>
+<ol>
+<li><strong>超时必须分相位。</strong> <code>connect</code> 与 <code>read</code> 分开给，DNS 单独算。一个数字撑不起五种故障。</li>
+<li><strong><code>UP</code> 不看时间看字节。</strong> 有进展 = 有字节到达；否则再慢也不是「慢」。</li>
+<li><strong>阈值别压在边界上。</strong> 本机 RST 到达在 2.01 秒，<code>timeout=2</code> 与 <code>3</code> 给出不同判定。</li>
+<li><strong>不要等内核。</strong> 系统在 <strong>21.015 秒</strong> 才放弃；你的阈值必须显著小于它，否则你在等一个不存在的决定。</li>
+<li><strong>重试只对「还没发生任何事」的阶段有效。</strong> 请求发出后可能已产生副作用，不重试。</li>
+<li><strong>算预算，不写感觉。</strong> <code>ceil(次数/并发) × (connect+read) + 退避</code>：实测串行 3×6s = 18.01/18.19s，并行 3 次 = 6.05s（3.0x）。</li>
+<li><strong>半截 body 是第三种状态。</strong> <code>200</code> + <code>Content-Length</code> 未满足 = <code>TRUNCATED</code>，不能当成功（这条和<a href="https://felixwang007.github.io/awesome-content-tools/articles/agent-output-truncation-detection-guide.html">截断那篇</a>是同一件事的两端）。</li>
+<li><strong>必须记 <code>elapsed</code>。</strong> 零字节故障时各相位都可能是 <code>None</code>，只有实等时长能进预算。</li>
+<li><strong>采样与判定分离。</strong> 判定逻辑要能拿历史读数离线复判，否则它只是当场印象。</li>
+<li><strong>退出码三态。</strong> <code>0</code> 有进展 / <code>2</code> 连上了没走完 / <code>3</code> 没连上。<code>2</code> 不是成功，<code>3</code> 也不是「重试一下就好」。</li>
+</ol>
+<hr />
+<h2>11. 边界声明（这套东西不做什么）</h2>
+<ul>
+<li><strong>它只描述一次测量，不预测下一次。</strong> <code>github.com</code> 在一小时内从 000 变成 <code>SLOW_UP</code>；任何「这个域名稳定/不稳定」的结论都需要跨时间采样。</li>
+<li><strong>相位拆分不用于容量估算。</strong> 第 4.1 节那三行就是反例：TLS 段十分钟内变了 6.3 倍。</li>
+<li><strong><code>SLOW_UP</code> 与 <code>UP</code> 的分界是阈值。</strong> 阈值是人给的，所以这个标签是人的判断，不是对端的事实。</li>
+<li><strong><code>read_cap</code> 是我自己的上限。</strong> 读到它停下会被标成「未被截断」，绝不冒充对端给的完整响应。</li>
+<li><strong><code>deepest_phase</code> 是唯一权威。</strong> 没有它，<code>classify</code> 只返回 <code>UNKNOWN</code>——宁可说不知道，也不猜一个动作相反的结论。</li>
+<li><strong>32 项自检覆盖规则语义，不覆盖网络行为。</strong> 网络今天给出 6 秒无应答，明天可能 2 秒；自检保证的是「同样的读数一定得到同样的判定」，不是「网络会这样表现」。</li>
+<li><strong>不处理 HTTP/2、代理链、证书固定、重定向语义。</strong> 这些每个都能再写一篇；本工具只回答「这一次请求断在哪一段」。</li>
+<li><strong>不替代真实业务探针。</strong> 它探的是网络与 HTTP 层；「接口返回了但返回的业务数据是错的」不在范围内（那是 <a href="https://felixwang007.github.io/awesome-content-tools/articles/agent-rule-binding-audit-guide.html">规则绑定审计</a> 那一支的事）。</li>
+</ul>
+<hr />
+<h2>一句话版</h2>
+<p><strong>「超时了」不是一条读数，是一个结论；而这个结论至少需要五个数（DNS / TCP / TLS / 首字节 / 整包）加一个字节计数才成立。</strong> 少一个，你就不小心在用一个阈值，冒充对网络的理解。</p>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
