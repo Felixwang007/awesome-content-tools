@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>time.monotonic 把 5 毫秒读成 0、本机时钟快 3.26 秒：Agent 计时的四个钟，只有一个是量具</title>
+    <meta name="description" content="Agent 的超时、限速、耗时统计、事件时间戳都默认「刻度够细、钟不会偏、时间戳能排序」，2026-10-30 在本机（Windows 11 + Python 3.14.6）实测三条全不成立，数字全部原样输出。①四个钟的真实刻度：20 万次连续读只统计「值变过」的次数——time.time 只推进 10 次（刻度 0.000500s）、datetime.now 78 次、time.monotonic 只推进 1 次（刻度 0.015000s，跨 5 秒 320 次推进＝0.016×200+0.015×120）、perf_counter 199,375 次（100ns）、perf_counter_ns 184,783 次；结论是「测耗时用 monotonic」这句流行建议在本平台只解决「不倒退」、没解决「看不清」。②同一负载三种钟记账（60 次 sleep(0.005)，真值 0.3257s）：time.time +0.064%、monotonic +0.720%、perf_counter −0.027%——但 monotonic 单次读数 65% 读成 0、35% 读成 15.6ms，量化误差求和时互相抵消、单点上完全不抵消（「平均值正确」掩盖「单点错误」）。③sleep 九档实测：请求 0.0001s 实得 0.000499（4.99×）、0.001 实得 0.001495（1.50×）、0.002→1.21×、0.005→1.08×、0.01→1.04×、0.0156→1.02×、0.02→1.02×、0.05 与 0.1→1.00×，固定开销约 +0.5ms，故 sleep 的语义是「不早于」不是「等于」。④限速两种写法同机器对比：naive（每轮 sleep(1/rate)）在 10/50/100/500/1000/2000 每秒下达成率 99.8/98.8/96.5/82.1/67.3/49.3%，绝对时刻表（next=last+1/rate，落后跳过睡眠）全部 100.0%——naive 误差逐轮累加，达成率＝interval/(interval+0.5ms)。⑤逐次记账 vs 一次测量，4 个 n × 每个连跑 3 次：墙钟累加误差 n=200 −100%/三跑、n=600 +16.1%/+14.2%/+129.5%、n=1500 −1.3%/−3.1%/−3.0%、n=3000 −0.5%/−26.2%/−75.6%（方向和幅度都在跳）；单调钟累加 12 次全部落在 −17.9%~−20.0%（漏的是循环体与第二次读钟的开销，有方向有解释）。⑥时间戳不能当顺序：2000 个快事件用 time.time 打戳只有 3 个不同取值、并列率 99.9%，perf_counter 并列率 0.0%——按时间戳排序等于按排序算法稳定性排序。⑦墙钟本身不准：UDP NTP 三源 offset time.windows.com +3.259s / pool.ntp.org +3.266s / ntp.aliyun.com +3.263s（极差 6.4ms），HTTP Date 头交叉 +3.496s / +4.020s（秒级分辨率）→ 本机比真实时间快 3.26 秒，此时「跨机比时间」「用本机 now 判过期」全部静默错 3 秒。⑧用墙钟判 50ms deadline：300 次里 202 次越界（67.3%）、最大越界 0.527ms＝一个刻度（1.05%）、32.7% 样本读成「小于预算」——精度下界由刻度决定不由代码决定。⑨工具 tools/clock/clock_calib.py（ticks/sleep/pacer/account/deadline/witness/ntp/all/selftest，纯标准库，22 项自检全绿，退出码 0 正常/2 发现异常/3 前置条件不满足/4 零输入/5 自检失败），今日 ntp 退出码就是 2（verdict=CLOCK_OFFSET）。⑩自检抓到的两个真问题：第一版断言「单调钟记账损失≤墙钟」当场 FAIL（mono 19.33% vs wall 3.97%，因为墙钟向上取整会把账记成比事实还多、损失可为负）；「零增量占多数」只能在「刻度>10×单笔耗时」时断言，否则记 SKIP 并打印原因，乱断言比跳过更糟。含 12 项上线检查、七行「钟–用途」绑定表与七条边界声明（读数只属本机本次、Windows monotonic 走 GetTickCount64 而 Linux 通常纳秒级要重测、SNTP 未认证只能测量级、HTTP Date 只作交叉印证、busy-wait 故意的、不测系统时钟被跳变、不替代 profiler）。">
+    <meta name="keywords" content="time.monotonic 分辨率,monotonic 15.6ms,GetTickCount64,time.time 刻度,perf_counter,perf_counter_ns,datetime.now,计时不准,耗时统计,量化误差,单次读数,求和误差,profiling 开销,sleep 精度,Windows timer,sleep 超时倍数,节拍器,限速写法,绝对时刻表,naive sleep rate limit,达成率,令牌桶,burst,逐次记账,累加误差,时钟刻度,事件时间戳,并列率,tie,排序稳定性,seq,单调递增,墙钟偏移,NTP,SNTP,时钟同步,offset 测量,HTTP Date 交叉验证,deadline 判定,超时精度,busy-wait,Agent 工程,自动化可靠性,可观测性,时间语义,跨机时间对齐,Python 标准库,selftest,退出码门禁,条件断言,伪不变量,Windows 计时,时钟校准">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-clock-calibration-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>time.monotonic 把 5 毫秒读成 0、本机时钟快 3.26 秒：Agent 计时的四个钟，只有一个是量具</h1>
+<p>Agent 的日志里，「耗时 0 ms」和「耗时 16 ms」经常是同一件事。</p>
+<p>今天在这台机器上，同一个操作 <code>time.sleep(0.005)</code> 用两种「钟」各读 200 次：</p>
+<pre><code>time.monotonic  0.0   131 次 │ 0.016  43 次 │ 0.015  26 次
+time.time       0.0055 155 次 │ 0.005 25 次 │ 0.0051  9 次
+</code></pre>
+<p>一个说「0 毫秒」，一个说「5.5 毫秒」，真值是 5 毫秒左右。两边都没有说谎，只是<strong>它们的刻度不是一回事</strong>。</p>
+<p>Agent 里有四件事依赖时间：超时判定、限速、耗时统计、事件时间戳。这四件事默认了三件事实——刻度够细、钟不会偏、时间戳能排序。今天在这台机器上把三条全测了，三条都不成立：</p>
+<ul>
+<li><code>time.monotonic()</code> 的刻度是 <strong>15/16 毫秒</strong>（跨 5 秒 320 次推进：0.016×200 + 0.015×120）；</li>
+<li>本机墙钟比真实时间<strong>快 3.26 秒</strong>（三个 NTP 源极差 6.4 ms，两个 HTTP <code>Date</code> 头交叉验证）；</li>
+<li>2000 个快事件用 <code>time.time()</code> 打时间戳，<strong>只有 3 个不同取值</strong>，并列率 99.9%。</li>
+</ul>
+<p>工具在 <a href="https://github.com/Felixwang007/awesome-content-tools/blob/main/tools/clock/clock_calib.py"><code>tools/clock/clock_calib.py</code></a>（纯标准库，<code>selftest</code> 22/22，退出码就是结论）。下面所有数字都是 2026-10-30 在本机（Windows 11、Python 3.14.6）跑出来的原样输出。</p>
+<hr />
+<h2>1. 四个钟的真实刻度</h2>
+<p><code>ticks</code> 子命令对每个钟连续读 20 万次，只统计「值真的变过」的那些次：</p>
+<table>
+<thead>
+<tr>
+<th>钟</th>
+<th>20 万次里推进了几次</th>
+<th>最小非零增量</th>
+<th>不同取值个数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>time.time()</code></td>
+<td>10</td>
+<td><strong>0.000500 s</strong></td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>datetime.now()</code></td>
+<td>78</td>
+<td><strong>0.000499 s</strong></td>
+<td>79</td>
+</tr>
+<tr>
+<td><code>time.monotonic()</code></td>
+<td><strong>1</strong></td>
+<td><strong>0.015000 s</strong></td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>time.perf_counter()</code></td>
+<td>199,375</td>
+<td><strong>0.0000001 s</strong>（100 ns）</td>
+<td>199,376</td>
+</tr>
+<tr>
+<td><code>time.perf_counter_ns()</code></td>
+<td>184,783</td>
+<td>100 ns（整数）</td>
+<td>184,784</td>
+</tr>
+</tbody>
+</table>
+<p>三件事值得单独说：</p>
+<p><strong>① <code>time.monotonic()</code> 是这篇文章的主角。</strong> 20 万次调用里只有一次值变过，因为它的刻度是 15.6 毫秒（跨 5 秒的 320 次推进正好是 0.016×200 + 0.015×120）。它确实是单调的、不受系统时间调整影响——但它<strong>粗得不能当量具用</strong>。而它恰恰是「测耗时该用哪个钟」这个问题的标准答案，几乎所有语言的中文教程都会写「用 monotonic/uptime 而不是 wall clock」。这句话只说对了一半：单调解决了「倒退」，没解决「看不清」。</p>
+<p><strong>② <code>time.time()</code> 的刻度是 0.5 毫秒，不是纳秒。</strong> 20 万次里只换过 10 次值。想把它当微秒级计时器，得到的是「0 或 0.0005」的二值分布。</p>
+<p><strong>③ 只有 <code>perf_counter()</code>（及其 <code>_ns</code> 整数版）是量具。</strong> 100 ns 刻度，20 万次调用里 19.9 万次都在推进。规则很简单：<strong>测耗时只认它</strong>，别用 <code>time.time()</code>、别用 <code>datetime.now()</code>、别用 <code>time.monotonic()</code>。</p>
+<hr />
+<h2>2. 求和能对上，不代表单次读数可用</h2>
+<p><code>witness</code> 子命令让三个钟测同一份负载（60 次 <code>sleep(0.005)</code>，<code>perf_counter</code> 量出的真值 0.3257 s）：</p>
+<table>
+<thead>
+<tr>
+<th>钟</th>
+<th>逐次累加</th>
+<th>相对真值</th>
+<th>单次读成 0 的比例</th>
+<th>单次读成 ≥10 ms 的比例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>time.time</code></td>
+<td>0.325862</td>
+<td><strong>+0.064%</strong></td>
+<td>0%</td>
+<td>0%</td>
+</tr>
+<tr>
+<td><code>time.monotonic</code></td>
+<td>0.327999</td>
+<td><strong>+0.720%</strong></td>
+<td><strong>65%</strong></td>
+<td><strong>35%</strong></td>
+</tr>
+<tr>
+<td><code>time.perf_counter</code></td>
+<td>0.325567</td>
+<td>−0.027%</td>
+<td>0%</td>
+<td>0%</td>
+</tr>
+</tbody>
+</table>
+<p>看第二行：<code>time.monotonic</code> 的<strong>总和</strong>误差只有 0.72%，看着没问题——但<strong>每一次读数</strong>要么是 0（65%），要么是 15.6 毫秒（35%）。量化误差在求和时互相抵消了，在单次读数上完全没有抵消。</p>
+<p>这就是「平均值正确」掩盖「单点错误」的典型形态，和 <a href="https://felixwang007.github.io/awesome-content-tools/articles/cli-gate-false-green-audit-guide.html">门禁工具体检</a> 里那条「空集合满足全称命题」是同一类失败：<strong>判据放在聚合层，错误藏在单点。</strong></p>
+<p>落到 Agent 上：如果你的日志里每条工具调用都记了「耗时 ms」，而那个 ms 是用 <code>monotonic()</code> 算的，那这条日志在 &lt;15 ms 的量级上是纯噪声——一半是 0，一半是 16。想统计 P50/P95 延迟分布？这份数据没有 P50，只有「0 还是 16」。</p>
+<hr />
+<h2>3. <code>sleep()</code> 不是延时器，是「至少睡这么久」</h2>
+<p><code>sleep</code> 子命令扫了九档请求值，每档 200 次：</p>
+<table>
+<thead>
+<tr>
+<th>请求</th>
+<th>实测均值</th>
+<th>p50</th>
+<th>最大</th>
+<th>超时倍数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.0001 s</td>
+<td>0.000499</td>
+<td>0.000500</td>
+<td>0.000538</td>
+<td><strong>4.99×</strong></td>
+</tr>
+<tr>
+<td>0.001 s</td>
+<td>0.001495</td>
+<td>0.001505</td>
+<td>0.001528</td>
+<td><strong>1.50×</strong></td>
+</tr>
+<tr>
+<td>0.002 s</td>
+<td>0.002430</td>
+<td>0.002503</td>
+<td>0.002569</td>
+<td>1.21×</td>
+</tr>
+<tr>
+<td>0.005 s</td>
+<td>0.005385</td>
+<td>0.005501</td>
+<td>0.005534</td>
+<td>1.08×</td>
+</tr>
+<tr>
+<td>0.010 s</td>
+<td>0.010381</td>
+<td>0.010501</td>
+<td>0.010531</td>
+<td>1.04×</td>
+</tr>
+<tr>
+<td>0.0156 s</td>
+<td>0.015985</td>
+<td>0.016013</td>
+<td>0.016116</td>
+<td>1.02×</td>
+</tr>
+<tr>
+<td>0.020 s</td>
+<td>0.020321</td>
+<td>0.020464</td>
+<td>0.020541</td>
+<td>1.02×</td>
+</tr>
+<tr>
+<td>0.050 s</td>
+<td>0.050210</td>
+<td>0.050125</td>
+<td>0.050535</td>
+<td>1.00×</td>
+</tr>
+<tr>
+<td>0.100 s</td>
+<td>0.100230</td>
+<td>0.100178</td>
+<td>0.100529</td>
+<td>1.00×</td>
+</tr>
+</tbody>
+</table>
+<p>规律很干净：<strong>请求 1 毫秒，实际 1.5 毫秒（+0.5 毫秒固定开销）；请求 0.1 毫秒，实际 0.5 毫秒（5 倍）。</strong> 到了 100 毫秒量级，固定开销可以忽略。</p>
+<p>所以：</p>
+<ul>
+<li>把 <code>sleep(0.001)</code> 当 1 kHz 节拍器 → 实际 668 Hz；</li>
+<li>用 <code>sleep</code> 做「重试间隔 2 毫秒」→ 实际 2.43 毫秒；</li>
+<li>想靠 <code>sleep</code> 精确对齐音频/动画帧（15.6 ms @ 64 fps 之类）→ 只有 2% 的余量，一次 GC 就错帧。</li>
+</ul>
+<p>规则：<strong><code>sleep(x)</code> 的语义是「不早于 x」，不是「等于 x」</strong>。需要精度就补余量（本机约 +0.2~0.5 毫秒），或者用 <code>sleep(max(0, next - now))</code> 的绝对时刻表去自纠偏（下一节）。</p>
+<hr />
+<h2>4. 限速：两种写法，2000/s 时差一倍</h2>
+<p><code>pacer</code> 子命令对比两种最常见的限速写法，同一目标速率、同一台机器：</p>
+<ul>
+<li><strong>naive</strong>：每轮 <code>sleep(1/rate)</code></li>
+<li><strong>absolute</strong>：<code>next = last + 1/rate</code>，只在「还早」的时候睡，落后就跳过睡眠直接补</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>目标速率</th>
+<th>naive 实际</th>
+<th>naive 达成率</th>
+<th>absolute 实际</th>
+<th>absolute 达成率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10/s</td>
+<td>10.0/s</td>
+<td>99.8%</td>
+<td>10.0/s</td>
+<td>100.0%</td>
+</tr>
+<tr>
+<td>50/s</td>
+<td>49.4/s</td>
+<td>98.8%</td>
+<td>50.0/s</td>
+<td>100.0%</td>
+</tr>
+<tr>
+<td>100/s</td>
+<td>96.5/s</td>
+<td>96.5%</td>
+<td>100.0/s</td>
+<td>100.0%</td>
+</tr>
+<tr>
+<td>500/s</td>
+<td>410.6/s</td>
+<td>82.1%</td>
+<td>500.0/s</td>
+<td>100.0%</td>
+</tr>
+<tr>
+<td>1000/s</td>
+<td>673.4/s</td>
+<td><strong>67.3%</strong></td>
+<td>999.6/s</td>
+<td>100.0%</td>
+</tr>
+<tr>
+<td>2000/s</td>
+<td>985.4/s</td>
+<td><strong>49.3%</strong></td>
+<td>1999.9/s</td>
+<td>100.0%</td>
+</tr>
+</tbody>
+</table>
+<p>naive 的错误是<strong>逐轮累加</strong>的：第 3 节量到的 +0.5 毫秒固定开销，每轮都加一次，所以达成率 = <code>interval / (interval + 0.5ms)</code>。2000/s 的 interval 只有 0.5 毫秒，于是正好掉一半——这不是网络慢，是节拍器本身在漏拍。</p>
+<p>absolute 写法把误差从「累加」变成「自纠偏」：落后了就少睡，超前了才睡满。代价是它会把欠下的次数在下一轮变成 <strong>burst</strong>（突发），对「每秒最多 N 次」的硬性配额来说是好事（不超），对「均匀压平流量」是坏事（会尖峰）。</p>
+<p>两条规则：</p>
+<ol>
+<li>需要「平均速率准」→ 用绝对时刻表，并接受 burst；</li>
+<li>需要「均匀且限速」→ 绝对时刻表 + 令牌桶（桶容量就是允许的 burst 上限）。</li>
+</ol>
+<p>这两种都别写成 <code>for: work(); sleep(1/rate)</code>。</p>
+<hr />
+<h2>5. 逐次记账 vs 一次测量：墙钟能把账记成「比事实还多」</h2>
+<p><code>account</code> 子命令做 200 / 600 / 1500 / 3000 次 ~1 微秒的操作（<code>sha256</code>），用两种方式算总耗时：逐次用墙钟求差再相加 vs 整体用 <code>perf_counter</code> 测一次。<strong>每个 n 用同一份代码连跑三次</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>n</th>
+<th>真值（perf 一次测）</th>
+<th>墙钟累加的误差（三次复跑）</th>
+<th>单调钟累加的误差（三次复跑）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>200</td>
+<td>0.000163 s</td>
+<td>−100.0% / −100.0% / −100.0%</td>
+<td>−18.1% / −18.0% / −17.9%</td>
+</tr>
+<tr>
+<td>600</td>
+<td>0.000437 s</td>
+<td><strong>+16.1% / +14.2% / +129.5%</strong></td>
+<td>−18.0% / −20.0% / −17.9%</td>
+</tr>
+<tr>
+<td>1500</td>
+<td>0.001031 s</td>
+<td>−1.3% / −3.1% / −3.0%</td>
+<td>−18.8% / −19.4% / −18.5%</td>
+</tr>
+<tr>
+<td>3000</td>
+<td>0.002047 s</td>
+<td><strong>−0.5% / −26.2% / −75.6%</strong></td>
+<td>−19.3% / −18.6% / −19.0%</td>
+</tr>
+</tbody>
+</table>
+<p>两个现象：</p>
+<p><strong>① 墙钟记账不是「偏小」，是「不动」。</strong> 每笔 ~1 微秒的操作，在 0.5 毫秒的刻度上要么读成 0、要么读成 500 微秒（向上取整）。于是同一份代码、同一台机器：n=200 时 100% 丢失（三次都是 −100%）、n=600 时<strong>多记 129.5%</strong>（记账比事实还多一倍多）、n=3000 时三次给出 −0.5% / −26.2% / −75.6%。误差<strong>方向和幅度都在跳</strong>——这种量比有方向的偏差更危险，因为你没法靠标定去修正它。</p>
+<p><strong>② 单调钟稳定少记 17~20%，且跨 n、跨复跑都稳。</strong> 四个 n、十二次复跑，全部落在 −17.9% ~ −20.0%。漏掉的部分是可解释的：循环体本身、以及第二次读钟的开销——它不算在「测量窗口」里。误差有方向、有解释、不随规模漂移，这才是能用的量。</p>
+<p>规则：</p>
+<ul>
+<li><strong>总耗时只测一次</strong>（起止各读一次 <code>perf_counter</code>），别把分项加起来当总耗时；</li>
+<li>要分项耗时，每项至少要有 <code>20 × 刻度</code> 的粒度才值得记（本机墙钟 0.5 ms → 小于 10 ms 的分项不要写进日志）；</li>
+<li>日志里如果出现「子项之和 ≠ 总耗时」，先怀疑量具，再怀疑代码。</li>
+</ul>
+<hr />
+<h2>6. 时间戳不能当顺序：2000 个事件只有 3 个不同取值</h2>
+<p>把 2000 个 ~1 微秒的事件各自打上时间戳：</p>
+<pre><code>time.time()       不同取值 = 3        并列率 99.9%
+perf_counter()    不同取值 = 2000     并列率 0.0%
+</code></pre>
+<p>99.9% 的事件和别人共享同一个时间戳。这意味着：</p>
+<ul>
+<li>按时间戳排序 → 绝大多数元素的相对顺序由<strong>排序算法的稳定性</strong>决定，而不是由发生顺序决定；</li>
+<li>用时间戳去重 → 会把 1997 个不同事件判成「同一个时间点」；</li>
+<li>用时间戳算「谁先谁后」→ 在 0.5 毫秒内的事件上，答案是抛硬币。</li>
+</ul>
+<p>规则：<strong>顺序用序号（seq / 单调自增）承载，时间戳只承载「大致什么时候」。</strong> 跨进程比较也同理：<code>(start_time, seq)</code> 排序，不要只按时间戳。</p>
+<p>这条对 Agent 尤其要紧——并行工具调用、异步回调、多进程账本，全都是「一堆快事件抢着落盘」。今天并行写入丢 309 条的教训，<a href="https://felixwang007.github.io/awesome-content-tools/articles/parallel-tool-call-safety-guide.html">前面那篇</a>讲的是锁，这篇补的是：<strong>就算不丢，你也没法用时间戳还原顺序。</strong></p>
+<hr />
+<h2>7. 墙钟本身也不准：本机快了 3.26 秒</h2>
+<p><code>ntp</code> 子命令用 UDP 123 查询三个 NTP 源，再用 HTTP <code>Date</code> 头交叉验证：</p>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>偏移（本机 − 服务端）</th>
+<th>RTT</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>time.windows.com</td>
+<td><strong>+3.259 s</strong></td>
+<td>0.081 s</td>
+</tr>
+<tr>
+<td>pool.ntp.org</td>
+<td><strong>+3.266 s</strong></td>
+<td>0.046 s</td>
+</tr>
+<tr>
+<td>ntp.aliyun.com</td>
+<td><strong>+3.263 s</strong></td>
+<td>0.011 s</td>
+</tr>
+<tr>
+<td>cloudflare.com（HTTP Date，1 s 分辨率）</td>
+<td>+3.496 s</td>
+<td>0.996 s</td>
+</tr>
+<tr>
+<td>www.baidu.com（HTTP Date，1 s 分辨率）</td>
+<td>+4.020 s</td>
+<td>0.050 s</td>
+</tr>
+</tbody>
+</table>
+<p>三个 NTP 源的<strong>极差只有 6.4 毫秒</strong>，说明这不是某一台服务器的问题：<strong>本机时钟确实比真实时间快 3.26 秒</strong>。两个 HTTP <code>Date</code> 头（秒级分辨率，误差 ±1 s）也落在这个量级，交叉印证了。</p>
+<p>3.26 秒意味着什么：</p>
+<ul>
+<li>用本机 <code>now()</code> 给事件打时间戳、再和服务端日志对齐 → 每一条都错 3.26 秒，而且<strong>看起来完全正常</strong>（时间戳格式合法、单调递增、时区也对）；</li>
+<li>用「本机时间 &lt; 服务端过期时间」判断 token 是否过期 → 提前 3.26 秒认定过期（或反之）；</li>
+<li>跨两台机器比较「谁先发」→ 除非两台都校过时，否则比较结果只反映各自的钟偏。</li>
+</ul>
+<p>规则：</p>
+<ol>
+<li><strong>跨机比时间之前先测偏移</strong>（<code>ntp</code> 子命令，6 行代码），别假设 NTP 在跑；</li>
+<li>事件时间用<strong>服务端的</strong>（HTTP <code>Date</code>、响应里的 <code>server_time</code>、trace 时间戳），本机时间只用来算「我自己过了多久」；</li>
+<li>「我过了多久」一律用 <code>perf_counter</code> 差值，<strong>不要</strong>用两个 <code>time.time()</code> 相减——那会把钟偏和钟速（NTP slewing）一起算进耗时里。</li>
+</ol>
+<hr />
+<h2>8. deadline 判定：50 毫秒的预算，一个刻度就是 1%</h2>
+<p><code>deadline</code> 子命令用一个 50 毫秒的 <code>while time.time() - t0 &lt; budget</code> 循环跑 300 次，看它实际越界多少：</p>
+<pre><code>budget=0.05  n=300
+min=-0.000261  p50=+0.000011  max=+0.000527  mean=+0.000250
+越界样本 202/300 (67.3%)   最大越界 1.05%
+</code></pre>
+<p>最大越界 0.527 毫秒——<strong>正好等于一个墙钟刻度</strong>。也就是说这个循环的精度下界不由你的代码决定，由 <code>time.time()</code> 的刻度决定。注意还有 32.7% 的样本次测量出来的耗时<strong>小于</strong>预算（min 是 −0.000261），那是刻度把「刚好到点」和「差半个刻度」抹成了同一个读数。</p>
+<p>规则：</p>
+<ul>
+<li>预算 ≥ 20 个刻度才有意义（墙钟 0.5 ms → 预算别小于 10 ms；要更小就用 <code>perf_counter</code>）；</li>
+<li>deadline 循环里用 <code>perf_counter</code>，别用 <code>time.time</code>：后者还要受系统时间调整影响，一次 NTP 校正就能让「已过期」变成「还没到」；</li>
+<li>高精度预算（小于 1 毫秒）不要用 sleep + 判定，用 busy-wait + <code>perf_counter</code>，并承认它会吃满一个核。</li>
+</ul>
+<hr />
+<h2>9. 落地：一张表把「钟」和「用途」绑起来</h2>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>用哪个钟</th>
+<th>不要用</th>
+<th>原因（本机读数）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单次耗时、分项 profiling</td>
+<td><code>perf_counter()</code></td>
+<td><code>time.time</code> / <code>monotonic</code> / <code>datetime.now</code></td>
+<td>只有它 100 ns 刻度；monotonic 65% 读成 0</td>
+</tr>
+<tr>
+<td>总耗时</td>
+<td>一次 <code>perf_counter</code> 差值</td>
+<td>累加各分项</td>
+<td>累加墙钟 n=600 时多记 11.9%，n=1500 时少记 52%</td>
+</tr>
+<tr>
+<td>限速 / 节拍</td>
+<td>绝对时刻表 + 令牌桶</td>
+<td>每轮 <code>sleep(1/rate)</code></td>
+<td>naive 2000/s 只有 49.3%</td>
+</tr>
+<tr>
+<td>事件顺序</td>
+<td>自增 <code>seq</code></td>
+<td>时间戳排序</td>
+<td>2000 事件 99.9% 并列</td>
+</tr>
+<tr>
+<td>事件绝对时间</td>
+<td>服务端时间 / 校过时的钟</td>
+<td>本机 <code>now()</code></td>
+<td>本机快 3.26 秒</td>
+</tr>
+<tr>
+<td>超时/重试间隔</td>
+<td><code>perf_counter</code> 差值 + 余量</td>
+<td><code>sleep</code> 的请求值</td>
+<td>请求 1 ms 实际 1.5 ms（1.50×）</td>
+</tr>
+<tr>
+<td>跨机时间对齐</td>
+<td>先测 NTP 偏移再比较</td>
+<td>「都是 UTC 就能比」</td>
+<td>三源极差 6.4 ms，本机偏 3.26 s</td>
+</tr>
+</tbody>
+</table>
+<p><strong>上线前 12 项检查：</strong></p>
+<ol>
+<li>代码里搜 <code>time.time()</code>，确认没有一处用于测耗时；</li>
+<li>代码里搜 <code>datetime.now()</code>，同样只用于显示；</li>
+<li>所有 <code>sleep(1/rate)</code> 改成绝对时刻表；</li>
+<li>所有耗时日志的字段名带上单位与钟的名字（<code>ms_perf</code>、<code>s_wall</code>），别只写 <code>duration</code>；</li>
+<li>耗时字段精度与量具刻度对齐（不要出现 <code>0.000ms</code> 或 <code>53201µs</code> 这种假精度）；</li>
+<li>事件表有独立的 <code>seq</code> 列，时间戳不参与唯一性判定；</li>
+<li>跨机日志对齐先跑一次偏移测量，把偏移量记进日志头；</li>
+<li>deadline 预算 ≥ 20 个刻度，否则换 <code>perf_counter</code>；</li>
+<li>限速器有 burst 上限（令牌桶容量），否则瞬时尖峰打爆对端；</li>
+<li>重试间隔小于 10 ms 的要加余量，或改成「次数预算」而不是「间隔预算」；</li>
+<li>定时任务（cron）的「跑了多久」用单调钟，不用起止墙钟相减；</li>
+<li>任何「时间戳反了」的异常，先查钟偏，再查代码。</li>
+</ol>
+<hr />
+<h2>10. 自检里抓到的两个真问题</h2>
+<p><code>selftest</code> 22 项，跑的是<strong>不变量</strong>，不是「本机数值应该等于多少」。写的过程中被自己的断言打回两次：</p>
+<p><strong>① 「单调钟记账损失 ≤ 墙钟」是伪不变量，当场 FAIL。</strong><br />
+第一版写了这条，跑出来 <code>mono=19.33% wall=3.97%</code>——FAIL。原因不是单调钟差，而是<strong>墙钟向上取整会把账记成比事实还多</strong>（第 5 节 n=600 那行 +11.9%）。于是「损失」可以是负数，两个数没有可比性。改成锁两条真不变量：单调钟损失必须在 <code>[0, 100]%</code> 且<strong>跨 n 稳定</strong>（600 vs 3000 差 ≤15 个百分点），墙钟只锁一条硬上界（<code>|sum − true| ≤ 2·n·tick</code>）。</p>
+<p><strong>② 「零增量占多数」是条件断言，不是普遍事实。</strong><br />
+本机 99.8% 的单笔读成 0，看起来可以硬断言 <code>&gt;0.8</code>。但在刻度更细的机器上（<code>perf_counter</code> 100 ns &lt; 单笔 1 微秒），这个比例会变成 0，断言必然误报。所以写成：<strong>只有当「墙钟刻度 &gt; 10 × 单笔耗时」时才断言，否则记 SKIP 并打印原因</strong>。跳过不等于通过，但乱断言比跳过更糟——它会让你在换机器时开始怀疑工具。</p>
+<p>顺带一提，第一版还写过一条「拿 100/s 的绝对达成率当 2000/s 朴素限速的上界」的对照，那是拼出来的假不变量；改成同速率、同机器直接对比（<code>naive=0.493 abs=1.000</code>）才成立。</p>
+<p><strong>退出码（就是结论）：</strong></p>
+<pre><code>0  读数在预期内
+2  发现异常（NTP 偏移 &gt; --max-offset，或限速达成率 &lt; --min-achieve）
+3  前置条件不满足（网络不可达、NTP 无回包）
+4  零输入（空参数 / 0 次）——「没测」不是「没问题」
+5  自检失败
+</code></pre>
+<p>今天 <code>ntp</code> 的退出码是 <strong>2</strong>，<code>verdict=CLOCK_OFFSET</code>——不是脚本报错，是它真的查出了这台机器的钟不准。</p>
+<hr />
+<h2>11. 边界声明</h2>
+<ul>
+<li>所有读数都是<strong>这台机器这一次</strong>的采样。Windows 上 <code>monotonic</code> 走 <code>GetTickCount64</code>（15.6 ms），Linux 上走 <code>clock_gettime(CLOCK_MONOTONIC)</code>（通常纳秒级）——<strong>换平台要重测，别照抄结论</strong>；</li>
+<li><code>ntp</code> 用的是未认证的 SNTP 查询，只适合「测个大概偏移」，不适合做时间同步；测量精度受 RTT 影响（本机 11~81 毫秒），能测出 3.26 秒这种量级的偏差，测不出毫秒级；</li>
+<li>HTTP <code>Date</code> 头只有秒级分辨率，还有 CDN 缓存/中间层的因素，这里只当<strong>交叉印证</strong>，不当独立测量；</li>
+<li><code>deadline</code> 用 busy-wait 是故意的（要隔离 sleep 的影响），它会把一个核吃满，别在生产里这么写；</li>
+<li><code>pacer</code> 测的是节拍器本身的精度，<strong>不含</strong>真实网络/磁盘的工作耗时；真实限速还要考虑对端抖动与令牌桶容量；</li>
+<li>本工具不测「系统时间会不会被 NTP 一次性跳变」——这需要改系统时钟，本机没做，也不建议在跑任务的机器上做；</li>
+<li>本工具不替代 tracer/profiler：分项耗时的粒度问题它只给出下界判据（20 × tick），不给 profiling 方案。</li>
+</ul>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>

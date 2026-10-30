@@ -1,0 +1,51 @@
+{
+  "cmd": "ntp",
+  "unit": "s",
+  "ntp": [
+    {
+      "host": "time.windows.com",
+      "server_time": 1793340470.6250856,
+      "local_mid": 1793340473.8843048,
+      "offset": 3.259219169616699,
+      "rtt": 0.08102941513061523
+    },
+    {
+      "host": "pool.ntp.org",
+      "server_time": 1793340470.682194,
+      "local_mid": 1793340473.9478016,
+      "offset": 3.2656075954437256,
+      "rtt": 0.04596400260925293
+    },
+    {
+      "host": "ntp.aliyun.com",
+      "server_time": 1793340470.712904,
+      "local_mid": 1793340473.9760416,
+      "offset": 3.2631375789642334,
+      "rtt": 0.010516166687011719
+    }
+  ],
+  "http": [
+    {
+      "url": "https://www.cloudflare.com/",
+      "http": 200,
+      "server_time": 1793340471.0,
+      "local_mid": 1793340474.49625,
+      "offset": 3.4962499141693115,
+      "rtt": 0.995872974395752,
+      "resolution": 1.0
+    },
+    {
+      "url": "http://www.baidu.com/",
+      "http": 200,
+      "server_time": 1793340471.0,
+      "local_mid": 1793340475.0196443,
+      "offset": 4.019644260406494,
+      "rtt": 0.0499114990234375,
+      "resolution": 1.0
+    }
+  ],
+  "errors": [],
+  "offset_spread": 0.7604250907897949,
+  "max_abs_offset": 4.019644260406494,
+  "verdict": "CLOCK_OFFSET"
+}
