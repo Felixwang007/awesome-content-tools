@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>同一段重试，503 时只扣一笔、超时后收两遍钱：Agent 副作用幂等性的 10 个实测场景</title>
+    <meta name="description" content="2026-11-02 本机实测（Windows 11 + Python 3.14.6，真实 socket + 真实 JSONL 账本，连跑两遍结果相同，数字全部原样输出）：①同一段重试、同一个扣款服务，只把失败相位从「提交之前」换成「提交之后」，3 个意图的扣款笔数从 3 变成 6（6 次请求→6 笔扣款，同一意图两个不同凭据 rcpt_60cb1f98 / rcpt_677c864b）；日志里每一次都写「成功」，客户端读到的却都只是 status=None kind=transport——「请求从未到达」与「钱扣了、回包丢了」在客户端是同一个异常类别，没有能力分辨。②十个场景的完整矩阵：提交前失败+朴素重试 6 请求/3 笔/0 重复（安全）；提交后丢回包+朴素重试 6 请求/6 笔/3 重复；同故障下意图键+服务端原子去重 6 请求/3 笔/0 重复（第二次 replay=true，返回第一笔凭据，账本不增行）；每次尝试换新键（per_attempt）6 笔/3 重复=有键等于没键；内容哈希去重（两笔同额不同单）2 意图/1 笔/0 重复/1 丢失=少收 50% 而订单显示支付成功；check-then-act 并发（2 线程同键 10 轮，窗口 50ms）20 请求/20 笔/10 重复=10/10 轮全重复，不是偶发是必发；原子去重同样并发 10 笔/0 重复；at-most-once（不重试）3 单全丢（lost=3）；幂等窗口 0.1s 短于重试退避 0.35s 时键过期=没键（3 重复）；键存在内存、进程重启丢了 store 再用同一把键重试 1 意图 2 笔/1 重复。③三条硬要求：键由意图推导（规范化=键排序+去首尾空白）、去重窗口必须≥最坏重试跨度（含人工补单与隔夜重跑）、键必须与副作用同一次写入落地（重启后仍可查）。④验收三数 committed/distinct_intents/duplicates/lost，缺一条都能混过去：只看 dup=0 会漏掉「少收 50%」，只看 lost=0 会漏掉重复扣款；断言要落在账本行数与意图集，不能断言 HTTP 200 或客户端自报 success。⑤按相位给六行重试动作表（连接被拒/DNS 失败可原样重试、4xx 不重试、408/425/429 按 Retry-After、5xx 与超时与 200+半截 body 都必须带同一把键重试），以及 12 项上线检查清单（副作用接口是否接受幂等键、键是否前置持久化、并发路径用唯一约束而非 check-then-act、重试总预算、对账作业非零即报警等）。⑥工具 tools/idem/idem_probe.py：probe/classify/selftest 三子命令，纯标准库零依赖，31/31 自检，退出码 0 全一致/2 有场景与声明不符/3 前置条件不满足/4 零输入/5 自检失败。含七条边界声明（读数是本机一次实测换平台要重测、服务端是语义复现不是真实支付网关、故障注入确定不覆盖随机丢包与网络分区、只测单进程共享 store、TTL 0.1s 只为秒级复现、幂等不替代 T+1 对账、只对有副作用且可重试的调用成立）。">
+    <meta name="keywords" content="幂等性,idempotency,幂等键,idempotency key,副作用,重试,retry,重复扣款,双重扣款,double charge,at-least-once,at-most-once,exactly-once,提交前失败,提交后丢回包,丢响应,超时重试,请求已生效,结果未知,replay,重放,去重窗口,TTL,幂等窗口,意图键,内容哈希去重,少收钱,丢单,check-then-act,先查后写,原子去重,唯一约束,并发重复,竞态,账本对账,reconcile,duplicates,lost,断言账本,假成功,HTTP 200 不算证据,错误分类,4xx 不重试,429 Retry-After,5xx 重试,重试预算,指数退避,支付网关,发券,发短信,Agent 工程,自动化可靠性,Python 标准库,selftest,退出码门禁">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://felixwang007.github.io/awesome-content-tools/articles/agent-idempotency-side-effects-guide.html">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, "Microsoft YaHei", sans-serif; background: #0f0f1a; color: #e0e0e0; line-height: 1.8; }
+        .container { max-width: 780px; margin: 0 auto; padding: 40px 24px; }
+        h1 { font-size: 1.9em; color: #fff; margin-bottom: 16px; line-height: 1.4; }
+        h2 { font-size: 1.4em; color: #8b8bf0; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 2px solid #2a2a5a; }
+        h3 { font-size: 1.15em; color: #fff; margin: 28px 0 12px; }
+        p { margin-bottom: 16px; color: #c8c8d8; }
+        a { color: #8b8bf0; text-decoration: none; }
+        a:hover { color: #a29bfe; }
+        blockquote { border-left: 4px solid #6c5ce7; background: #1a1a35; padding: 12px 20px; margin: 16px 0; border-radius: 0 8px 8px 0; color: #b0b0d0; }
+        code { background: #1a1a35; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #a29bfe; }
+        pre { background: #1a1a35; padding: 16px 20px; border-radius: 8px; overflow-x: auto; margin: 16px 0; }
+        pre code { background: none; padding: 0; color: #e0e0e0; }
+        ul, ol { padding-left: 24px; margin-bottom: 16px; color: #c8c8d8; }
+        li { margin-bottom: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+        th, td { border: 1px solid #2a2a5a; padding: 10px 14px; text-align: left; }
+        th { background: #1a1a35; color: #fff; }
+        hr { border: none; border-top: 1px solid #2a2a5a; margin: 32px 0; }
+        .back { display: inline-block; margin-bottom: 24px; color: #6c5ce7; font-size: 0.9em; }
+        .footer { text-align: center; padding: 40px 20px; color: #555; font-size: 0.85em; border-top: 1px solid #1a1a35; margin-top: 40px; }
+        .footer a { color: #8b8bf0; text-decoration: none; }
+        strong { color: #fff; }
+        em { color: #a29bfe; }
+        @media (max-width: 768px) { .container { padding: 24px 16px; } h1 { font-size: 1.5em; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <a class="back" href="../index.html">← 返回导航站首页</a>
+<h1>同一段重试，503 时只扣一笔、超时后收两遍钱：Agent 副作用幂等性的 10 个实测场景</h1>
+<p>三个订单，六个请求，六笔扣款。日志里每一次调用都写着「成功」，账上却多收了一倍的钱。</p>
+<p>这不是段子，是 2026-11-02 在本机（Windows 11 + Python 3.14.6）跑出来的读数：同一个重试器、同一个扣款服务，只把「失败发生在提交之前」换成「失败发生在提交之后」，扣款笔数就从 3 变成 6。</p>
+<p>下面十条读数全部来自 <code>tools/idem/idem_probe.py</code>，真实 socket、真实 JSONL 账本、连跑两遍结果一模一样。</p>
+<h2>一、先看读数：10 个场景，同一台机器，同一个重试器</h2>
+<pre><code>scenario                   policy     key         req  charg  uniq   dup  lost
+----------------------------------------------------------------------------------
+pre_fail_naive             naive      none          6      3     3     0     0  OK
+post_drop_naive            naive      none          6      6     3     3     0  OK
+post_drop_key_atomic       key_atomic stable        6      3     3     0     0  OK
+post_drop_key_per_attempt  key_atomic per_attempt   6      6     3     3     0  OK
+content_hash_two_orders    content_hash stable      2      1     1     0     1  OK
+race_racy                  key_racy   stable       20     20    10    10     0  OK
+race_atomic                key_atomic stable       20     10    10     0     0  OK
+at_most_once               naive      stable        3      0     0     0     3  OK
+ttl_shorter_than_backoff   key_ttl    stable        6      6     3     3     0  OK
+restart_store_lost         key_atomic stable        2      2     1     1     0  OK
+----------------------------------------------------------------------------------
+wall=3.613s
+</code></pre>
+<p>列的含义，缺一列就会看错：</p>
+<ul>
+<li><code>req</code> 客户端发出的请求数（含重试）</li>
+<li><code>charg</code> 账本里落下的扣款条数（<strong>这是钱</strong>）</li>
+<li><code>uniq</code> 被扣过钱的意图数</li>
+<li><code>dup</code> 重复扣款数 = Σ max(0, 每意图条数 − 1)</li>
+<li><code>lost</code> 一分钱没收到的意图数</li>
+</ul>
+<p>只有 <code>dup=0 且 lost=0</code> 才是干净的。<code>dup=0、lost=3</code> 不是「没问题」，是「一单都没成」。</p>
+<h2>二、三种故障相位，客户端看到的都是同一种「失败」</h2>
+<p>同一个扣款服务，三种故障注入：</p>
+<table>
+<thead>
+<tr>
+<th>相位</th>
+<th>服务端发生了什么</th>
+<th>客户端读到</th>
+<th>实际结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>提交前失败</td>
+<td>返回 503，<strong>没有落账</strong></td>
+<td><code>status=503</code> <code>kind=server-error</code></td>
+<td>没扣钱，重试安全</td>
+</tr>
+<tr>
+<td>提交后丢回包</td>
+<td>已落账，随后 <code>shutdown(SHUT_RDWR)</code></td>
+<td><code>status=None</code> <code>kind=transport</code></td>
+<td><strong>已扣钱，重试就是再扣一次</strong></td>
+</tr>
+<tr>
+<td>回包慢于超时</td>
+<td>已落账，睡 0.6s 再回</td>
+<td><code>status=None</code> <code>kind=transport-timeout</code></td>
+<td><strong>已扣钱，同上</strong></td>
+</tr>
+</tbody>
+</table>
+<p>后两种在客户端是同一个异常类别（连接已被对端关闭 / 读超时），日志里都写「调用失败」。客户端<strong>没有能力</strong>从响应本身分辨「请求从未到达」和「请求到达了、钱扣了、回包丢了」。</p>
+<p>后两张表里那条 <code>post_drop_naive</code>：3 个意图 6 次请求 6 笔扣款，<code>dup=3</code>。第一笔和第二笔的收款凭据不一样，说明服务端老老实实收了两遍钱：</p>
+<pre><code>intent=ord-001 amount=1000 receipt=rcpt_60cb1f98 key=-
+intent=ord-001 amount=1000 receipt=rcpt_677c864b key=-
+</code></pre>
+<p>而同一故障下换成意图键 + 服务端原子去重（<code>post_drop_key_atomic</code>），账本只有三行，每行一把键：</p>
+<pre><code>intent=ord-001 amount=1000 receipt=rcpt_0686bb27 key=bea4e30dd4
+intent=ord-002 amount=1000 receipt=rcpt_a7c4733a key=6c4288e0af
+intent=ord-003 amount=1000 receipt=rcpt_971637bf key=9a7372ac4c
+</code></pre>
+<p>客户端那两次重试的读数长这样：</p>
+<pre><code>attempt=1 status=None kind=transport replay=None
+attempt=2 status=200 kind=ok        replay=True
+ledger lines: 1
+</code></pre>
+<p>第二次是<strong>重放</strong>（<code>replay=true</code>），返回的是第一笔的凭据，账本没有新增行。这就是幂等：请求可以来很多次，钱只能扣一次。</p>
+<h2>三、幂等键的三条硬要求（缺一条就等于没键）</h2>
+<h3>3.1 键必须由「意图」推导，不能由「本次尝试」推导</h3>
+<p><code>post_drop_key_per_attempt</code>：客户端每次都带键，只是每次换了新键 —— 结果和完全不带键一模一样（<code>dup=3</code>）。</p>
+<pre><code class="language-python"># 错：每次尝试一个新键 = 有键等于没键
+key = attempt_key(intent, attempt)
+# 对：同一意图的任何一次重试都是同一把键
+key = intent_key(intent)      # sha256(规范化(intent))[:16]
+</code></pre>
+<p>规范化也有讲究：键排序、字符串去首尾空白。<code>{"id":" x "}</code> 和 <code>{"id":"x"}</code> 必须是同一把键，否则同一次重试会因为一个空格被当成两笔。</p>
+<h3>3.2 去重窗口必须覆盖最长重试跨度</h3>
+<p><code>ttl_shorter_than_backoff</code>：服务端确实做了去重，但窗口 0.1s，而客户端退避 0.35s —— 键过期了，第二次照样落账，<code>dup=3</code>。</p>
+<p><strong>幂等窗口（TTL）&lt; 最坏重试跨度（次数 × 退避 + 单次超时）时，幂等只在理论上存在。</strong> 真实支付网关的窗口通常是 24 小时，不是为了让代码好写，是因为你的重试可能隔着几小时（手动补单、隔夜任务重跑）。</p>
+<h3>3.3 键存储必须与副作用同一次写入落地</h3>
+<p><code>restart_store_lost</code>：第一次提交成功但丢回包 → 进程重启（内存 store 清空、账本还在）→ 客户端带同一把键重试 → 又扣一笔，<code>dup=1</code>。</p>
+<p>这就是为什么「内存字典 + 定时清理」的去重实现在生产上会间歇性失效：<strong>键存在进程里，键就随进程一起死</strong>。键必须和扣款记录落在同一个事务/同一行记录里，重启后还能查到。</p>
+<h2>四、内容去重不是幂等：多收钱和少收钱都是事故</h2>
+<p><code>content_hash_two_orders</code>：两笔<strong>真实不同</strong>的订单（<code>ord-001</code>、<code>ord-002</code>），金额都是 1000。服务端按「金额哈希」去重 —— 第二笔被判成重放，返回第一笔的凭据。</p>
+<p>读数：<code>charg=1、uniq=1、dup=0、lost=1</code>。</p>
+<p>看起来 <code>dup=0</code> 很漂亮，实际上<strong>少收了 50% 的钱</strong>，而且顾客那一侧的订单状态是「支付成功」。</p>
+<blockquote>
+<p>去重的身份是「意图」，不是「内容」。金额、商品、手机号都会撞：同一个套餐两个人买、同一个用户连下两单、同一笔补款两次发起。用内容当键，等于随机吞单。</p>
+</blockquote>
+<h2>五、check-then-act 在并发下不是「概率问题」，是「必发问题」</h2>
+<p><code>race_racy</code>：2 个线程、同一把键、10 轮，服务端写法是「先查 store，查不到就睡 50ms 再落账」。</p>
+<pre><code>req=20  charg=20  uniq=10  dup=10      # 10 轮，每轮都重复
+</code></pre>
+<p><strong>10/10 轮全部重复，一次没漏。</strong> 换原子写法（查与写在同一个临界区里）：</p>
+<pre><code>req=20  charg=10  uniq=10  dup=0
+</code></pre>
+<p>常见误判是「并发重复是偶发，加个重试/告警就行」。实测的结论相反：只要「读」和「写」不在同一个临界区，那个窗口是<strong>确定性存在</strong>的，并发一来就必进。50ms 是我故意放大的窗口，真实代码里它就是一次网络往返、一次数据库查询的时间，同样必进。</p>
+<h2>六、at-most-once 也是错的</h2>
+<p><code>at_most_once</code>：不重试，只发一次。服务端第一次返回 503（提交前失败）→ <code>charg=0、lost=3</code>。</p>
+<p>三单生意全没了，而且客户端会认为「失败了，让用户重来」，用户重来时是<strong>新的意图</strong>，于是多一次下单、多一次风控判断。</p>
+<p>重试不是可选项。真正要决定的只有一件事：<strong>带着什么重试</strong>。答案是「带着由意图推导的、服务端会认的键」。</p>
+<h2>七、怎么验收：对账三数，断言账本，不要断言 200</h2>
+<p>幂等性的验收不能看 HTTP 状态码，也不能看客户端自报的 <code>success</code>。要看账本：</p>
+<pre><code class="language-python">def reconcile(entries, expected_intents):
+    per = Counter(e[&quot;intent&quot;] for e in entries)
+    return {
+        &quot;committed&quot;: len(entries),
+        &quot;distinct_intents&quot;: len(per),
+        &quot;duplicates&quot;: sum(max(0, c - 1) for c in per.values()),
+        &quot;lost&quot;: sum(1 for i in expected_intents if per.get(i, 0) == 0),
+    }
+</code></pre>
+<p>三条断言，缺一条都能混过去：</p>
+<ol>
+<li><code>duplicates == 0</code> —— 抓多收</li>
+<li><code>lost == 0</code> —— 抓少收（内容去重那条就是靠这个抓住的）</li>
+<li><code>committed == len(expected_intents)</code> —— 抓「账本行数对但意图对不上」</li>
+</ol>
+<p>Regression 测试里断言 <code>sink</code> 收到的<strong>确切参数和条数</strong>，不要断言 <code>approved == True</code> 或 <code>status_code == 200</code>。一个「成功」的状态和一个「成功了一次」的事实是两件事。</p>
+<h2>八、重试动作表</h2>
+<table>
+<thead>
+<tr>
+<th>读到的现象</th>
+<th>请求是否可能已生效</th>
+<th>动作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>连接被拒 / DNS 失败 / 无路由</td>
+<td>否</td>
+<td>可原样重试（仍建议带键）</td>
+</tr>
+<tr>
+<td>4xx（400/401/403/404/422）</td>
+<td>否</td>
+<td><strong>不重试</strong>，改参数或改权限</td>
+</tr>
+<tr>
+<td>408 / 425 / 429</td>
+<td>否（多半）</td>
+<td>按 <code>Retry-After</code> 退避后重试，带同一键</td>
+</tr>
+<tr>
+<td>5xx</td>
+<td><strong>可能已生效</strong></td>
+<td>带同一键重试，服务端必须能重放</td>
+</tr>
+<tr>
+<td>超时 / 连接被关 / 无响应</td>
+<td><strong>可能已生效</strong></td>
+<td>带同一键重试；<strong>绝不换键、绝不换意图</strong></td>
+</tr>
+<tr>
+<td>200 + 半截 body / 解析失败</td>
+<td><strong>可能已生效</strong></td>
+<td>先降 page size 或改用查询接口核对，再决定</td>
+</tr>
+</tbody>
+</table>
+<h2>九、12 项上线检查清单</h2>
+<ol>
+<li>这套调用的副作用是什么（扣款/发券/发短信/建资源），写下来</li>
+<li>副作用接口是否接受幂等键；不接受就先改服务端，客户端加重试只会放大事故</li>
+<li>键由意图推导，一次意图只生成一次（持久化在前，调用在后）</li>
+<li>键的规范化规则写死（排序、去空白、大小写、全角半角）</li>
+<li>键与副作用同事务落盘，重启后仍可查</li>
+<li>去重窗口 ≥ 最坏重试跨度（含人工补单、隔夜重跑）</li>
+<li>服务端重放要返回<strong>原凭据</strong>，而不是「已处理」三个字</li>
+<li>并发路径上用唯一约束/行锁/条件写，不要用 check-then-act</li>
+<li>4xx 不进重试；408/425/429/5xx 按分类重试</li>
+<li>重试有总预算（次数 + 总时长），并有上限退出</li>
+<li>每次重试都把「第几次」写进日志（键相同、次数不同）</li>
+<li>对账作业每天跑一次 <code>duplicates / lost</code>，非零就报警</li>
+</ol>
+<h2>十、工具与复现</h2>
+<pre><code class="language-bash">python3 tools/idem/idem_probe.py selftest    # 31/31，纯逻辑，不开端口
+python3 tools/idem/idem_probe.py probe       # 10 个场景，真实 socket + 真实账本
+python3 tools/idem/idem_probe.py classify --input readings.json
+</code></pre>
+<p>退出码：<code>0</code> 全部场景与声明一致 / <code>2</code> 有场景与声明不符（号称幂等却重复扣款）/ <code>3</code> 前置条件不满足 / <code>4</code> 零输入 / <code>5</code> 自检失败。</p>
+<p><code>probe</code> 会在每个场景里重建服务端和账本，把每次尝试的 <code>status/kind/retry/replay</code> 和账本行数一起打出来，最后把 JSON 明细也贴出来 —— 复制这段 JSON 就能做回归对比。</p>
+<h2>十一、边界声明</h2>
+<ul>
+<li>数字是本机 2026-11-02 一次实测（连跑两遍结果相同），是读数不是常数；Windows 上的连接关闭行为与 Linux 可能不同，换平台要重测</li>
+<li>服务端是 <code>ThreadingHTTPServer</code> + 内存 store + JSONL 账本，用于复现语义，<strong>不是</strong>真实支付网关；真实网关的幂等窗口、重放格式要看它的文档</li>
+<li>故障注入是确定性的（固定丢第一次、固定先失败一次），没有覆盖随机丢包、网络分区、半开连接</li>
+<li>只测了单进程共享 store，未测多副本/多区域下的分布式去重（那是另一篇文章：唯一键 + 全局约束）</li>
+<li>TTL 用 0.1s 是为了在秒级复现，不代表生产该用 0.1s</li>
+<li>本文不替代 T+1 对账系统：幂等是「尽量不重复」，对账是「事后一定能发现」</li>
+<li>只对有副作用且可重试的调用成立；纯读接口不需要键（但需要防缓存穿透）</li>
+</ul>
+<h2>相关</h2>
+<ul>
+<li><a href="https://felixwang007.github.io/awesome-content-tools/articles/timeout-phase-splitting-guide.html">把「超时」拆成五段</a>：先分清错误落在哪一段，再决定这一条要不要重试</li>
+<li><a href="https://felixwang007.github.io/awesome-content-tools/articles/parallel-tool-call-safety-guide.html">并行工具调用安全分批</a>：并发下的丢失更新与「批边界是唯一恢复点」</li>
+<li><a href="https://felixwang007.github.io/awesome-content-tools/articles/agent-record-replay-tape-guide.html">工具调用磁带 record-replay</a>：把副作用短路掉，让幂等逻辑可以离线复跑</li>
+<li><a href="https://felixwang007.github.io/awesome-content-tools/articles/agent-rule-binding-audit-guide.html">AI Agent 规则绑定审计</a>：为什么「自报成功」不能当验收证据</li>
+</ul>
+    <hr>
+    <p>📚 <strong>更多创作资源</strong>: <a href="https://afdian.com/a/felix007">https://afdian.com/a/felix007</a></p>
+</div>
+<div class="footer">
+    <p>© 2026 <a href="https://afdian.com/a/felix007">小帅在创作</a> · 自媒体创作与AI工具导航</p>
+</div>
+</body>
+</html>
